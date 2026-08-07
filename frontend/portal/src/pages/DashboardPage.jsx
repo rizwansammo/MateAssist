@@ -3,11 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { Metric, QuickAction } from "@mateassist/ui";
 
 import { StatusBadge } from "../components/StatusBadge.jsx";
+import { useAuth } from "../context/AuthContext.jsx";
 import { usePortal } from "../context/PortalContext.jsx";
 
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { tickets, counts } = usePortal();
+  const { user } = useAuth();
+  const firstName = (user?.display_name ?? "").split(" ")[0] || "there";
 
   return (
     <main className="flex flex-col gap-7 px-7 pb-12 pt-8">
@@ -17,7 +20,7 @@ export default function DashboardPage() {
             Tuesday, 5 August 2026
           </div>
           <h1 className="mb-2 mt-2.5 text-[32px] font-semibold tracking-tight text-ink">
-            Good morning, Rizwan
+            Good morning, {firstName}
           </h1>
           <p className="text-[14.5px] text-slate-600">
             You have {counts.Open + counts.Pending} tickets in progress.

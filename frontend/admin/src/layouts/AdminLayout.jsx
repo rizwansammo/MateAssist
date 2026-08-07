@@ -1,7 +1,8 @@
 import { BarChart3, Building2, KeyRound, LayoutDashboard, ScrollText, ShieldCheck } from "lucide-react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Toast } from "@mateassist/ui";
 
+import { useAuth } from "../context/AuthContext.jsx";
 import { AdminProvider, useAdmin } from "../context/AdminContext.jsx";
 
 const NAV = [
@@ -86,7 +87,7 @@ function Sidebar() {
   );
 }
 
-function Header({ crumb }) {
+function Header({ crumb, user, role, onSignOut }) {
   return (
     <header className="sticky top-0 z-20 flex h-[66px] items-center gap-4 border-b border-slate-800 bg-ink px-6">
       <div className="flex min-w-0 items-center gap-2.5">
@@ -95,15 +96,24 @@ function Header({ crumb }) {
         <span className="truncate text-sm font-semibold text-white">{crumb}</span>
       </div>
       <div className="ml-auto flex flex-none items-center gap-3">
-        <div className="flex items-center gap-2.5">
+        <button
+          type="button"
+          onClick={onSignOut}
+          title="Sign out"
+          className="flex items-center gap-2.5 rounded-none border border-transparent p-1 pr-1.5 transition hover:border-slate-800 hover:bg-[#0F1B2D]"
+        >
           <div className="flex h-[30px] w-[30px] items-center justify-center rounded-none bg-emerald-500 text-xs font-bold text-emerald-950">
-            AS
+            {user?.initials ?? "?"}
           </div>
-          <div className="hidden sm:block">
-            <div className="text-[13px] font-medium leading-tight text-white">A. Siddiqui</div>
-            <div className="font-mono text-[11px] leading-tight text-slate-500">platform-owner</div>
+          <div className="hidden text-left sm:block">
+            <div className="text-[13px] font-medium leading-tight text-white">
+              {user?.display_name ?? user?.email}
+            </div>
+            <div className="font-mono text-[11px] leading-tight text-slate-500">
+              {(role ?? "").toLowerCase().replace("_", "-")}
+            </div>
           </div>
-        </div>
+        </button>
       </div>
     </header>
   );
@@ -111,16 +121,28 @@ function Header({ crumb }) {
 
 function AdminShell() {
   const { toast, dismissToast } = useAdmin();
+  const { user, role, logout } = useAuth();
+  const navigate = useNavigate();
   const location = useLocation();
   const active = NAV.find((item) =>
     item.end ? location.pathname === item.to : location.pathname.startsWith(item.to)
   );
 
+  const onSignOut = async () => {
+    await logout();
+    navigate("/login", { replace: true });
+  };
+
   return (
     <div className="grid min-h-screen grid-cols-1 bg-slate-100 lg:grid-cols-[268px_1fr]">
       <Sidebar />
       <div className="flex min-w-0 flex-col">
-        <Header crumb={active?.crumb ?? "Global overview"} />
+        <Header
+          crumb={active?.crumb ?? "Global overview"}
+          user={user}
+          role={role}
+          onSignOut={onSignOut}
+        />
         <Outlet />
       </div>
       <Toast toast={toast} onDismiss={dismissToast} />

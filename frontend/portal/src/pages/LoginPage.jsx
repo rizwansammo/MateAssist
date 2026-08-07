@@ -1,7 +1,9 @@
-import { useState } from "react";
-import { ArrowRight } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { AlertTriangle, ArrowRight } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Wordmark } from "@mateassist/ui";
+
+import { useAuth } from "../context/AuthContext.jsx";
 
 /**
  * Sign-in.
@@ -14,14 +16,41 @@ import { Wordmark } from "@mateassist/ui";
  */
 export default function LoginPage() {
   const navigate = useNavigate();
-  const [workspace, setWorkspace] = useState("netswitch");
+  const location = useLocation();
+  const { login, status, isAuthenticated } = useAuth();
+
+  // The workspace is read from the Host header server-side (D-021), so this
+  // field reflects where you already are rather than choosing where to go.
+  const workspace = window.location.hostname.split(".")[0];
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const onSubmit = (event) => {
+  const redirectTo = location.state?.from ?? "/app";
+
+  useEffect(() => {
+    if (isAuthenticated) navigate(redirectTo, { replace: true });
+  }, [isAuthenticated, navigate, redirectTo]);
+
+  const onSubmit = async (event) => {
     event.preventDefault();
-    // Phase 2: exchange credentials for a token pair, then redirect.
-    navigate("/app");
+    setError("");
+    setSubmitting(true);
+    try {
+      await login(email, password);
+      navigate(redirectTo, { replace: true });
+    } catch (cause) {
+      // The server answers every failure identically so the form cannot be used
+      // to enumerate accounts; the UI must not undo that by being more helpful.
+      setError(
+        cause?.status === 403
+          ? "This workspace is suspended. Contact your administrator."
+          : "Invalid credentials."
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -90,13 +119,13 @@ export default function LoginPage() {
               <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
                 Workspace / Company name
               </span>
-              <div className="flex rounded-none border border-slate-300 bg-white">
+              <div className="flex rounded-none border border-slate-300 bg-slate-50">
                 <input
                   type="text"
                   value={workspace}
-                  onChange={(e) => setWorkspace(e.target.value)}
-                  autoComplete="organization"
-                  className="min-w-0 flex-1 rounded-none border-0 bg-transparent px-3.5 py-3 text-sm text-ink"
+                  readOnly
+                  aria-readonly="true"
+                  className="min-w-0 flex-1 rounded-none border-0 bg-transparent px-3.5 py-3 text-sm text-slate-600"
                 />
                 <span className="flex items-center rounded-none border-l border-hairline bg-slate-100 px-3.5 font-mono text-[13px] text-slate-500">
                   .mateassist.io
@@ -147,11 +176,22 @@ export default function LoginPage() {
               Keep me signed in on this device
             </label>
 
+            {error && (
+              <div
+                role="alert"
+                className="flex gap-3 rounded-none border border-red-200 bg-red-50 px-4 py-3"
+              >
+                <AlertTriangle size={16} strokeWidth={2} className="mt-0.5 flex-none text-red-700" />
+                <span className="text-[12.5px] leading-relaxed text-red-800">{error}</span>
+              </div>
+            )}
+
             <button
               type="submit"
-              className="flex items-center justify-center gap-2.5 rounded-none bg-emerald-600 px-5 py-4 text-sm font-semibold tracking-wide text-white transition hover:bg-emerald-700"
+              disabled={submitting || status === "restoring"}
+              className="flex items-center justify-center gap-2.5 rounded-none bg-emerald-600 px-5 py-4 text-sm font-semibold tracking-wide text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-400"
             >
-              Sign in to workspace
+              {submitting ? "Signing in..." : "Sign in to workspace"}
               <ArrowRight size={16} />
             </button>
           </form>

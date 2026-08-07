@@ -11,6 +11,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 urlpatterns = [
     path("api/v1/", include("apps.core.urls")),
+    path("api/v1/", include("apps.accounts.urls")),
 ]
 
 if settings.DEBUG:

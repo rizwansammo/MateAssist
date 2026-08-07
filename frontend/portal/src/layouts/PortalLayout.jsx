@@ -2,6 +2,7 @@ import { Bot, BookOpen, Bell, ChevronDown, LayoutDashboard, Search, Ticket } fro
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Toast, Wordmark } from "@mateassist/ui";
 
+import { useAuth } from "../context/AuthContext.jsx";
 import { PortalProvider, usePortal } from "../context/PortalContext.jsx";
 
 const NAV = [
@@ -11,7 +12,7 @@ const NAV = [
   { to: "/app/knowledge", label: "Knowledge Base", icon: BookOpen, crumb: "Knowledge Base" }
 ];
 
-function Sidebar({ openCount }) {
+function Sidebar({ openCount, tenant }) {
   return (
     <aside className="sticky top-0 hidden h-screen flex-col bg-ink lg:flex">
       <div className="border-b border-slate-800 px-5 py-4">
@@ -23,12 +24,16 @@ function Sidebar({ openCount }) {
       </div>
       <div className="mx-3.5 mb-5 flex items-center gap-3 rounded-none border-l-2 border-emerald-500 bg-ink2 px-3.5 py-3">
         <div className="flex h-6 w-6 items-center justify-center rounded-none bg-slate-800 text-[11px] font-semibold text-slate-200">
-          NS
+          {(tenant?.name ?? "??").slice(0, 2).toUpperCase()}
         </div>
         <div className="min-w-0">
-          {/* Phase 2 resolves the tenant from the subdomain (D-021). */}
-          <div className="truncate text-[13px] font-medium text-slate-100">Netswitch</div>
-          <div className="font-mono text-[10px] text-slate-500">netswitch.mateassist.io</div>
+          {/* Resolved server-side from the Host header (D-021). */}
+          <div className="truncate text-[13px] font-medium text-slate-100">
+            {tenant?.name ?? "Workspace"}
+          </div>
+          <div className="truncate font-mono text-[10px] text-slate-500">
+            {tenant?.slug ? `${tenant.slug}.mateassist.io` : ""}
+          </div>
         </div>
       </div>
 
@@ -83,16 +88,16 @@ function Sidebar({ openCount }) {
   );
 }
 
-function Header({ crumb }) {
+function Header({ crumb, tenant, user, onSignOut }) {
   const navigate = useNavigate();
 
   return (
     <header className="sticky top-0 z-20 flex h-[66px] items-center gap-5 border-b border-hairline bg-white px-7">
       <div className="flex min-w-0 items-center gap-2.5">
         <div className="flex h-[26px] w-[26px] flex-none items-center justify-center rounded-none bg-ink font-mono text-[11px] font-bold text-emerald-400">
-          NS
+          {(tenant?.name ?? "??").slice(0, 2).toUpperCase()}
         </div>
-        <span className="text-[13.5px] font-semibold text-ink">Netswitch</span>
+        <span className="text-[13.5px] font-semibold text-ink">{tenant?.name ?? "Workspace"}</span>
         <span className="text-xs text-slate-400">/</span>
         <span className="truncate text-[13.5px] text-slate-600">{crumb}</span>
       </div>
@@ -115,19 +120,20 @@ function Header({ crumb }) {
           <span className="absolute -right-px -top-px h-[7px] w-[7px] rounded-none bg-emerald-600" />
         </button>
         <div className="h-7 w-px bg-hairline" />
-        {/* Phase 2 replaces this with the authenticated user and a real sign-out. */}
         <button
           type="button"
-          onClick={() => navigate("/login")}
+          onClick={onSignOut}
           title="Sign out"
           className="flex items-center gap-2.5 rounded-none border border-transparent p-1 pr-1.5 transition hover:border-hairline hover:bg-slate-50"
         >
           <div className="flex h-[30px] w-[30px] items-center justify-center rounded-none bg-teal-700 text-xs font-semibold text-white">
-            RA
+            {user?.initials ?? "?"}
           </div>
           <div className="hidden text-left sm:block">
-            <div className="text-[13px] font-medium leading-tight text-ink">Rizwan Ahmed</div>
-            <div className="text-[11px] leading-tight text-slate-500">Sales Engineering</div>
+            <div className="text-[13px] font-medium leading-tight text-ink">
+              {user?.display_name ?? user?.email}
+            </div>
+            <div className="text-[11px] leading-tight text-slate-500">{user?.job_title || ""}</div>
           </div>
           <ChevronDown size={14} className="text-slate-400" />
         </button>
@@ -138,8 +144,14 @@ function Header({ crumb }) {
 
 function PortalShell() {
   const { counts, toast, dismissToast } = usePortal();
+  const { tenant, user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+
+  const onSignOut = async () => {
+    await logout();
+    navigate("/login", { replace: true });
+  };
 
   const active = NAV.find((item) =>
     item.end ? location.pathname === item.to : location.pathname.startsWith(item.to)
@@ -148,10 +160,15 @@ function PortalShell() {
 
   return (
     <div className="grid min-h-screen grid-cols-1 bg-slate-100 lg:grid-cols-[260px_1fr]">
-      <Sidebar openCount={counts.Open + counts.Pending} />
+      <Sidebar openCount={counts.Open + counts.Pending} tenant={tenant} />
 
       <div className="flex min-w-0 flex-col">
-        <Header crumb={active?.crumb ?? "Dashboard"} />
+        <Header
+          crumb={active?.crumb ?? "Dashboard"}
+          tenant={tenant}
+          user={user}
+          onSignOut={onSignOut}
+        />
         <Outlet />
       </div>
 

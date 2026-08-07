@@ -45,6 +45,7 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "drf_spectacular",
     "django_celery_beat",
@@ -77,7 +78,9 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    # apps.tenancy.middleware.SubdomainMiddleware is inserted here in Phase 2.
+    # Last, so request.user is already resolved and the tenant transaction wraps
+    # only view work rather than session/auth queries.
+    "apps.tenancy.middleware.SubdomainMiddleware",
 ]
 
 TEMPLATES = [
@@ -97,12 +100,33 @@ TEMPLATES = [
 
 # ------------------------------------------------------------ database ------
 
-DATABASES = {"default": env.db("DATABASE_URL")}
-DATABASES["default"]["ATOMIC_REQUESTS"] = False
-# RLS (D-020) sets app.tenant_id with SET LOCAL, which is transaction-scoped.
-# Phase 2 opens an explicit transaction per request rather than relying on
-# ATOMIC_REQUESTS, so the tenant variable and the transaction share a lifetime.
-DATABASES["default"]["CONN_MAX_AGE"] = env.int("DB_CONN_MAX_AGE", default=0)
+# Two aliases onto the same database, differing only in the role they connect as
+# (D-020). This split is what makes RLS real rather than decorative:
+#
+#   default -> mateassist_app, NOSUPERUSER. All tenant traffic. Subject to policy.
+#   admin   -> POSTGRES_USER, superuser/owner. Migrations and the platform-admin
+#              surface, which must legitimately see across tenants.
+#
+# PostgreSQL exempts superusers from RLS unconditionally, so running the app as
+# the owner would leave every policy in place and enforcing nothing.
+DATABASES = {
+    "default": env.db("DATABASE_APP_URL"),
+    "admin": env.db("DATABASE_URL"),
+}
+for _alias in DATABASES:
+    DATABASES[_alias]["ATOMIC_REQUESTS"] = False
+    # SubdomainMiddleware opens an explicit transaction per request so the
+    # transaction-scoped app.tenant_id and the work share a lifetime.
+    DATABASES[_alias]["CONN_MAX_AGE"] = env.int("DB_CONN_MAX_AGE", default=0)
+
+# Migrations create policies and must run as the owner:
+#     manage.py migrate --database=admin
+MIGRATION_DATABASE = "admin"
+
+# Both aliases address the same physical database, so the test runner must not
+# try to build a second one for `admin`. MIRROR keeps the alias pointed at the
+# default test database while retaining its own (owner) credentials.
+DATABASES["admin"]["TEST"] = {"MIRROR": "default"}
 
 # ------------------------------------------------------- auth / identity ----
 
@@ -141,6 +165,31 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
     "SCHEMA_PATH_PREFIX": "/api/v1",
 }
+
+# ---------------------------------------------------------------- jwt -------
+
+from datetime import timedelta  # noqa: E402
+
+# D-031/D-032: short access token held in memory by the SPA, long refresh token
+# in an httpOnly cookie the JS never touches. Rotation + blacklist means a
+# stolen refresh token is usable at most once before it is invalidated.
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": True,
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": SECRET_KEY,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+}
+
+REFRESH_COOKIE_NAME = "mateassist_refresh"
+REFRESH_COOKIE_PATH = "/api/v1/auth"
+REFRESH_COOKIE_SAMESITE = "Lax"
+REFRESH_COOKIE_SECURE = not DEBUG
 
 # ------------------------------------------------------------- celery -------
 
