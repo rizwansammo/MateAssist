@@ -1,0 +1,166 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+
+    # The suite is not unit-testable in isolation and should not pretend to be:
+    # the D-025 gate asserts that PostgreSQL refuses cross-tenant reads, which
+    # requires a real PostgreSQL with pgvector. Mocking it would test the mock.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: mateassist
+          POSTGRES_USER: mateassist
+          POSTGRES_PASSWORD: ci-postgres-password
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mateassist -d mateassist"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports: ["6380:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # D-001 / A-003
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Create the non-superuser runtime role
+        # Superusers bypass RLS unconditionally. Without this the isolation
+        # tests would pass while proving nothing - see infra/scripts/setup-app-role.ps1.
+        env:
+          PGPASSWORD: ci-postgres-password
+        run: |
+          psql -h localhost -p 5433 -U mateassist -d mateassist -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE mateassist_app LOGIN PASSWORD 'ci-app-password'
+            NOSUPERUSER NOCREATEROLE CREATEDB;
+          GRANT CONNECT ON DATABASE mateassist TO mateassist_app;
+          GRANT USAGE, CREATE ON SCHEMA public TO mateassist_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mateassist_app;
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO mateassist_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO mateassist_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT USAGE, SELECT ON SEQUENCES TO mateassist_app;
+          SQL
+          # pgvector's CREATE EXTENSION needs superuser; seeding template1 means
+          # the throwaway test database inherits it (see setup-app-role.ps1).
+          psql -h localhost -p 5433 -U mateassist -d template1 -v ON_ERROR_STOP=1 \
+            -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+
+      - name: Write the CI environment
+        run: |
+          cat > .env <<'ENVFILE'
+          DJANGO_SETTINGS_MODULE=config.settings.dev
+          DJANGO_SECRET_KEY=ci-secret-key-not-used-in-production
+          DJANGO_DEBUG=1
+          DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,.localhost
+          BASE_DOMAIN=localhost:8000
+          DJANGO_PORT=8000
+          MATEASSIST_VAULT_KEY=Y2ktdmF1bHQta2V5LTMyLWJ5dGVzLWV4YWN0bHkh
+          POSTGRES_DB=mateassist
+          POSTGRES_USER=mateassist
+          POSTGRES_PASSWORD=ci-postgres-password
+          POSTGRES_HOST=127.0.0.1
+          POSTGRES_PORT=5433
+          DATABASE_URL=postgresql://mateassist:ci-postgres-password@127.0.0.1:5433/mateassist
+          DATABASE_APP_USER=mateassist_app
+          DATABASE_APP_PASSWORD=ci-app-password
+          DATABASE_APP_URL=postgresql://mateassist_app:ci-app-password@127.0.0.1:5433/mateassist
+          REDIS_URL=redis://127.0.0.1:6380/0
+          CELERY_BROKER_URL=redis://127.0.0.1:6380/1
+          CELERY_RESULT_BACKEND=redis://127.0.0.1:6380/2
+          EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+          EMBEDDING_DIM=384
+          HNSW_M=16
+          HNSW_EF_CONSTRUCTION=64
+          ENVFILE
+          python - <<'PY'
+          # The vault KEK must decode to exactly 32 bytes or every seal fails.
+          import base64, pathlib, re
+          key = base64.b64encode(b"ci-vault-key-32-bytes-exactly!!!").decode()
+          p = pathlib.Path(".env")
+          p.write_text(re.sub(r"MATEASSIST_VAULT_KEY=.*", f"MATEASSIST_VAULT_KEY={key}", p.read_text()))
+          PY
+
+      - name: Lint (ruff)
+        working-directory: backend
+        run: ruff check .
+
+      - name: Format (black)
+        working-directory: backend
+        run: black --check . --exclude "\.venv"
+
+      - name: Django checks
+        working-directory: backend
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+
+      - name: Migrate
+        working-directory: backend
+        run: python manage.py migrate --database=admin
+
+      - name: Tests
+        working-directory: backend
+        run: pytest -q
+
+      - name: Deploy checks against production settings
+        working-directory: backend
+        env:
+          DJANGO_ALLOWED_HOSTS: mateassist.io,.mateassist.io
+          CSRF_TRUSTED_ORIGINS: https://admin.mateassist.io
+          CORS_ALLOWED_ORIGIN_REGEXES: ^https://[a-z0-9-]+\.mateassist\.io$
+        run: python manage.py check --deploy --settings=config.settings.prod
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Design system guard (D-100)
+        # Zero border-radius is non-negotiable. This fails the build on any
+        # rounded-* utility other than rounded-none.
+        working-directory: frontend
+        run: npm run lint:radius
+
+      - name: Build both bundles
+        working-directory: frontend
+        run: npm run build

@@ -233,14 +233,29 @@ disabled control, a stub endpoint, or a "coming soon" state.
 
 ---
 
-## 12. Helpdesk Domain
+## 12. Escalation — SMTP handoff (supersedes the internal helpdesk domain)
+
+**Superseded by amendment A-008 (2026-08-07).** MateAssist does not store tickets.
+When the agent cannot solve an issue it hands off by email to the customer's existing
+helpdesk. D-120–D-123 below are retained only as the record of what was replaced.
 
 | ID | Decision | Value |
 |---|---|---|
-| D-120 | Ticket numbering | Per-tenant sequential via a **database sequence** (`IT-10942` format). Not `COUNT()+1` — that races |
-| D-121 | Status state machine | `Open → Pending → Resolved` (the prototype's three states), with allowed-transition enforcement at the model layer |
-| D-122 | Ticket creation from chat | DeepSeek's `create_ticket` tool call **never executes autonomously.** It renders the prototype's *Create Ticket* button; the user's click executes it. Human-in-the-loop on the only mutating tool |
-| D-123 | Escalation payload | Full transcript + retrieved citations + Gemini screenshot descriptions attached to the ticket |
+| D-124 | Escalation transport | **SMTP / SendGrid.** No `Ticket`, `Comment` or status state machine in this system |
+| D-125 | Tool name | The agent tool is **`escalate_via_email`**, not `create_ticket` |
+| D-126 | Human-in-the-loop | Unchanged in spirit: the tool call **renders a button; the user's click sends.** The model never emails anyone on its own |
+| D-127 | Payload | Full transcript + retrieved citations (with document titles) + Gemini image descriptions, as a readable email body |
+| D-128 | Destination | `Tenant.support_email`, set per workspace, falling back to a platform default. A tenant's escalations must never reach another tenant's helpdesk |
+| D-129 | Record kept | An `AuditEvent` per escalation (recipient, message-id, outcome). The transcript is **not** retained beyond the conversation |
+
+### Retired (paused indefinitely)
+
+| ID | Was |
+|---|---|
+| ~~D-120~~ | Per-tenant ticket numbering by database sequence |
+| ~~D-121~~ | `Open → Pending → Resolved` state machine |
+| ~~D-122~~ | `create_ticket` tool writing to a local table |
+| ~~D-123~~ | Escalation payload attached to a ticket row |
 
 ---
 
@@ -453,3 +468,38 @@ production serves (D-141).
 
 Recorded rather than settled: picking one belongs with the middleware that consumes it, and
 D-025's isolation gate is what will prove the choice works.
+
+---
+
+### A-008 — Internal ticketing replaced by an SMTP handoff
+**Date:** 2026-08-07 · **Amends:** D-120–D-123 (retired), §12 · **Migration cost:** none — nothing was built
+
+Phase 3 is **skipped**. MateAssist stores no tickets. When DeepSeek cannot resolve an issue,
+the backend compiles the transcript, the retrieved citations and any Gemini image descriptions
+and emails them to the workspace's existing helpdesk (D-124–D-129).
+
+The build order is now **Phase 4 → 5 → 6**: vault and engine contracts, ingestion and vectors,
+then agentic RAG chat. Ticketing may return as a final phase or never.
+
+**What this removes:** `Ticket`, `TicketComment`, `TicketAttachment`, `TicketEvent`, `Queue`,
+SLA clocks, the status state machine and per-tenant ticket numbering. None had been written, so
+there is nothing to unwind.
+
+**What it changes elsewhere — open, and flagged to the user:**
+
+1. The portal's **My Tickets** page and the dashboard's ticket metrics (open count, average
+   resolution, assigned engineer) now have no backend and never will. They are currently
+   rendering `seed/tickets.js`. Leaving a fake ticket table in a shipped product contradicts the
+   project's own premise, so they must be either removed or replaced with something real.
+   Recommended: remove My Tickets, and replace the metric row with figures the AI layer actually
+   produces — conversations, resolution rate, escalations sent, documents indexed.
+2. The chat action button changes from *Create Ticket* to an email handoff, and the ticket
+   confirmation card becomes an email-sent confirmation.
+3. **Data egress posture changes.** A transcript leaving over SMTP is plaintext in transit to a
+   third-party mail provider and is retained in the customer's mailbox indefinitely. That is a
+   materially different privacy profile from a row in a tenant-isolated database, and it is worth
+   a deliberate decision on redaction before Phase 6 wires it up.
+
+**New configuration required (Phase 6):** `Tenant.support_email`, an SMTP/SendGrid credential
+set, and `DEFAULT_FROM_EMAIL`. The provider credential belongs in the same encrypted vault as
+the AI keys (D-070/D-071) rather than in `.env`, since it is a rotatable third-party secret.

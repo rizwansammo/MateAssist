@@ -59,9 +59,7 @@ class HealthView(APIView):
         overall, checks = health.run_all()
 
         http_status = (
-            status.HTTP_503_SERVICE_UNAVAILABLE
-            if overall == health.ERROR
-            else status.HTTP_200_OK
+            status.HTTP_503_SERVICE_UNAVAILABLE if overall == health.ERROR else status.HTTP_200_OK
         )
 
         return Response(

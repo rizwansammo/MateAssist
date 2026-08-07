@@ -6,6 +6,8 @@ and it is not sent to any other endpoint. The access token goes in the body and
 the SPA holds it in memory only.
 """
 
+import contextlib
+
 from django.conf import settings
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
@@ -118,10 +120,10 @@ class LogoutView(APIView):
     def post(self, request):
         raw = request.COOKIES.get(settings.REFRESH_COOKIE_NAME)
         if raw:
-            try:
+            # Already expired or already blacklisted by rotation - either way the
+            # user is signing out, so the cookie still gets cleared below.
+            with contextlib.suppress(TokenError):
                 RefreshToken(raw).blacklist()
-            except TokenError:
-                pass  # already expired or reused - the cookie still gets cleared
         response = Response(status=status.HTTP_204_NO_CONTENT)
         response.delete_cookie(settings.REFRESH_COOKIE_NAME, path=settings.REFRESH_COOKIE_PATH)
         return response

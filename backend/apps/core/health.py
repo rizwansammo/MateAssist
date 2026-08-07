@@ -11,6 +11,7 @@ worker being offline is normal on a dev machine and must not read as an outage.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -18,6 +19,8 @@ from typing import Any
 from django.conf import settings
 from django.core.cache import cache
 from django.db import connection
+
+logger = logging.getLogger(__name__)
 
 OK = "ok"
 DEGRADED = "degraded"
@@ -94,8 +97,7 @@ def check_pgvector() -> Check:
             installed = cur.fetchone()
             if installed is None:
                 cur.execute(
-                    "SELECT default_version FROM pg_available_extensions "
-                    "WHERE name = 'vector'"
+                    "SELECT default_version FROM pg_available_extensions " "WHERE name = 'vector'"
                 )
                 available = cur.fetchone()
                 detail = (
@@ -125,9 +127,7 @@ def check_redis() -> Check:
     try:
         import redis
 
-        client = redis.from_url(
-            settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2
-        )
+        client = redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
         if not client.ping():
             return Check("redis", ERROR, "PING returned falsy", _elapsed_ms(started))
         info = client.info("server")
@@ -185,8 +185,11 @@ def check_celery_workers() -> Check:
         replies = celery_app.control.ping(timeout=WORKER_PING_TIMEOUT_SECONDS) or []
     except Exception as exc:
         return Check(
-            "celery_workers", DEGRADED, f"could not query: {exc}",
-            _elapsed_ms(started), required=False,
+            "celery_workers",
+            DEGRADED,
+            f"could not query: {exc}",
+            _elapsed_ms(started),
+            required=False,
         )
 
     if not replies:
@@ -199,14 +202,19 @@ def check_celery_workers() -> Check:
     else:
         names = sorted(name for reply in replies for name in reply)
         result = Check(
-            "celery_workers", OK, f"{len(names)} worker(s): {', '.join(names)}",
+            "celery_workers",
+            OK,
+            f"{len(names)} worker(s): {', '.join(names)}",
             required=False,
         )
 
     try:
         cache.set(WORKER_CACHE_KEY, asdict(result), WORKER_CACHE_TTL_SECONDS)
     except Exception:
-        pass  # caching is an optimisation, never a correctness requirement
+        # Caching is an optimisation, never a correctness requirement. Logged at
+        # debug rather than swallowed silently: if Redis is down the redis check
+        # already reports it loudly, so a second alarm here is just noise.
+        logger.debug("health worker-check cache write failed", exc_info=True)
 
     result.latency_ms = _elapsed_ms(started)
     return result

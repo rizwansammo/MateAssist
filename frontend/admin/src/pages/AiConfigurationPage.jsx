@@ -1,23 +1,35 @@
-import { useState } from "react";
-import { ArrowRight, Lock, Plus, ShieldCheck } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, ArrowRight, Lock, Plus, RefreshCw, ShieldCheck } from "lucide-react";
 import { Pill } from "@mateassist/ui";
 
 import { KeyModal } from "../components/KeyModal.jsx";
 import { useAdmin } from "../context/AdminContext.jsx";
-import { ENGINES, ENGINE_ASSIGNMENT, KEY_STATUS_TONE } from "../seed/engines.js";
+import { vaultApi } from "../lib/vault.js";
+import {
+  ENGINES,
+  ENGINE_ASSIGNMENT,
+  KEY_STATUS_LABEL,
+  KEY_STATUS_TONE
+} from "../seed/engines.js";
 
 /**
- * AI Configuration - restructured to the two-section specification (D-092).
+ * AI Configuration - two dedicated sections (D-092), now backed by the live
+ * credential vault.
  *
- * One dedicated section for the Text & Reasoning Engine (DeepSeek) and one for
- * the Vision & OCR Engine (Gemini). The prototype's Groq and OpenAI cards, the
- * tri-provider routing panel and the orchestration policy toggles are gone
- * entirely (D-044, D-085, D-086) - removed, not hidden behind a flag.
+ * The plaintext of a key exists in this file for exactly as long as it takes to
+ * POST it. Nothing reads a secret back: the API has no endpoint that returns
+ * one, so the tables below can only ever show `last4` (D-072).
  */
 
-function EngineSection({ engine, keys, stats, onAdd, onRotate, onRevoke }) {
+function EngineSection({ engine, keys, loading, onAdd, onRotate, onRevoke, onPurge }) {
+  const live = keys.filter((k) => k.status !== "REVOKED");
+  const active = live.filter((k) => k.is_available).length;
+  const limited = live.filter((k) => k.status === "RATE_LIMITED").length;
+
   return (
-    <section className={`rounded-none border border-hairline border-t-[3px] ${engine.accent} bg-white`}>
+    <section
+      className={`rounded-none border border-hairline border-t-[3px] ${engine.accent} bg-white`}
+    >
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-hairline px-6 py-5">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-3">
@@ -41,11 +53,6 @@ function EngineSection({ engine, keys, stats, onAdd, onRotate, onRevoke }) {
         </button>
       </div>
 
-      {/*
-        The engine contract, stated in the operator-facing UI. This separation is
-        the product's central safety property (D-042/D-043), so someone standing
-        in the key vault should be able to read what each engine may see.
-      */}
       <div className="grid gap-px border-b border-hairline bg-hairline sm:grid-cols-2">
         <div className="bg-emerald-50/40 px-6 py-4">
           <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-700">
@@ -66,15 +73,19 @@ function EngineSection({ engine, keys, stats, onAdd, onRotate, onRevoke }) {
 
       <div className="flex flex-wrap items-center gap-4 border-b border-hairline px-6 py-3.5">
         <span className="text-[12.5px] text-slate-500">
-          {stats.active}/{stats.pool} keys healthy
+          {loading ? "Loading pool..." : `${active}/${live.length} keys usable`}
         </span>
-        {stats.limited > 0 && (
-          <Pill tone="warn">{stats.limited} rate-limited</Pill>
+        {limited > 0 && <Pill tone="warn">{limited} rate-limited</Pill>}
+        {!loading && live.length === 0 && (
+          <span className="inline-flex items-center gap-2 text-[12.5px] font-medium text-amber-700">
+            <AlertTriangle size={14} />
+            This engine cannot serve requests until a key is added.
+          </span>
         )}
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[820px] border-collapse">
+        <table className="w-full min-w-[860px] border-collapse">
           <thead>
             <tr className="bg-slate-50 text-left text-[10.5px] font-semibold uppercase tracking-[0.12em] text-slate-500">
               <th className="border-b border-hairline px-6 py-3">Label</th>
@@ -91,30 +102,30 @@ function EngineSection({ engine, keys, stats, onAdd, onRotate, onRevoke }) {
                 <td className="border-b border-slate-100 px-6 py-4">
                   <div className="text-[13.5px] font-medium text-ink">{key.label}</div>
                   <div className="mt-0.5 text-[11.5px] text-slate-400">
-                    Added {key.added} - quota {key.quota}
+                    Added {new Date(key.created_at).toLocaleDateString("en-GB")} - quota{" "}
+                    {key.daily_quota ?? "unmetered"}
                   </div>
                 </td>
                 <td className="border-b border-slate-100 px-4 py-4">
-                  {/*
-                    Only the last four characters exist client-side. There is no
-                    endpoint that returns the plaintext (D-072).
-                  */}
                   <div className="inline-flex items-center gap-2.5 rounded-none border border-hairline bg-slate-50 px-2.5 py-1.5">
                     <Lock size={13} className="text-slate-500" />
                     <span className="font-mono text-[12.5px] tracking-wide text-slate-700">
-                      {"•".repeat(11)}
-                      {key.last4}
+                      {key.masked}
                     </span>
                   </div>
                 </td>
                 <td className="border-b border-slate-100 px-4 py-4">
-                  <Pill tone={KEY_STATUS_TONE[key.status] ?? "off"}>{key.status}</Pill>
+                  <Pill tone={KEY_STATUS_TONE[key.status] ?? "off"}>
+                    {KEY_STATUS_LABEL[key.status] ?? key.status}
+                  </Pill>
                 </td>
                 <td className="border-b border-slate-100 px-4 py-4 text-right font-mono text-[13px] text-ink">
-                  {key.requests}
+                  {key.requests_today}
                 </td>
                 <td className="whitespace-nowrap border-b border-slate-100 px-4 py-4 text-[13px] text-slate-500">
-                  {key.lastUsed}
+                  {key.last_used_at
+                    ? new Date(key.last_used_at).toLocaleString("en-GB")
+                    : "never"}
                 </td>
                 <td className="border-b border-slate-100 px-6 py-4">
                   <div className="flex justify-end gap-2">
@@ -127,19 +138,21 @@ function EngineSection({ engine, keys, stats, onAdd, onRotate, onRevoke }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => onRevoke(engine.id, key)}
+                      onClick={() =>
+                        key.status === "REVOKED" ? onPurge(key) : onRevoke(key)
+                      }
                       className="whitespace-nowrap rounded-none border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-50"
                     >
-                      {key.status === "Revoked" ? "Purge" : "Revoke"}
+                      {key.status === "REVOKED" ? "Purge" : "Revoke"}
                     </button>
                   </div>
                 </td>
               </tr>
             ))}
-            {keys.length === 0 && (
+            {!loading && keys.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-6 py-10 text-center text-[13.5px] text-slate-500">
-                  No {engine.provider} keys configured - this engine cannot serve requests.
+                  No {engine.provider} keys configured.
                 </td>
               </tr>
             )}
@@ -151,18 +164,92 @@ function EngineSection({ engine, keys, stats, onAdd, onRotate, onRevoke }) {
 }
 
 export default function AiConfigurationPage() {
-  const { keys, keyStats, saveKey, revokeKey } = useAdmin();
+  const { notify } = useAdmin();
+  const [keys, setKeys] = useState({ TEXT: [], VISION: [] });
+  const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await vaultApi.list();
+      const list = Array.isArray(rows) ? rows : (rows?.results ?? []);
+      setKeys({
+        TEXT: list.filter((k) => k.engine === "TEXT"),
+        VISION: list.filter((k) => k.engine === "VISION")
+      });
+    } catch (error) {
+      notify("Could not load the vault", error?.message ?? "Request failed", "warn");
+    } finally {
+      setLoading(false);
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const save = async ({ engineId, keyId, label, secret, quota }) => {
+    try {
+      if (keyId) {
+        await vaultApi.rotate(keyId, { label, secret });
+        notify("Key rotated", `${label} is live - audit event written`);
+      } else {
+        await vaultApi.create({
+          engine: engineId,
+          label,
+          secret,
+          daily_quota: quota && quota !== "unlimited" ? Number(quota) : null
+        });
+        notify("Key added", `${label} joined the ${engineId} pool`);
+      }
+      await refresh();
+    } catch (error) {
+      notify("Save failed", describe(error), "warn");
+    }
+  };
+
+  const revoke = async (key) => {
+    try {
+      await vaultApi.revoke(key.id);
+      notify("Key revoked", `${key.label} is out of rotation`, "warn");
+      await refresh();
+    } catch (error) {
+      notify("Revoke failed", describe(error), "warn");
+    }
+  };
+
+  const purge = async (key) => {
+    try {
+      await vaultApi.purge(key.id);
+      notify("Key purged", `${key.label} removed from the vault`, "warn");
+      await refresh();
+    } catch (error) {
+      notify("Purge failed", describe(error), "warn");
+    }
+  };
 
   return (
     <main className="flex flex-col gap-6 px-6 pb-12 pt-7">
-      <div>
-        <h1 className="mb-2 text-[28px] font-semibold tracking-tight text-ink">AI configuration</h1>
-        <p className="max-w-[720px] text-sm text-slate-500">
-          Central credential vault for the two engines. Keys are write-only - the plaintext is
-          never returned to the browser after save, and only the last four characters are
-          displayed again.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="mb-2 text-[28px] font-semibold tracking-tight text-ink">
+            AI configuration
+          </h1>
+          <p className="max-w-[720px] text-sm text-slate-500">
+            Central credential vault for the two engines. Keys are write-only - the plaintext is
+            never returned to the browser after save, and only the last four characters are ever
+            displayed again.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={refresh}
+          className="flex flex-none items-center gap-2 rounded-none border border-slate-300 bg-white px-3.5 py-2 text-[12.5px] font-medium text-slate-700 transition hover:bg-slate-50"
+        >
+          <RefreshCw size={14} />
+          Refresh
+        </button>
       </div>
 
       {ENGINES.map((engine) => (
@@ -170,19 +257,14 @@ export default function AiConfigurationPage() {
           key={engine.id}
           engine={engine}
           keys={keys[engine.id] ?? []}
-          stats={keyStats(engine.id)}
+          loading={loading}
           onAdd={(e) => setModal({ engine: e, existingKey: null })}
           onRotate={(e, key) => setModal({ engine: e, existingKey: key })}
-          onRevoke={revokeKey}
+          onRevoke={revoke}
+          onPurge={purge}
         />
       ))}
 
-      {/*
-        D-045: routing is deterministic, not policy-driven. Two engines with
-        fixed, non-overlapping roles leave nothing to route, so this replaces the
-        prototype's "Effective routing" panel and its Groq/OpenAI toggles with a
-        read-only statement of the contract.
-      */}
       <div className="flex flex-col gap-4 rounded-none border border-ink bg-ink p-6">
         <div>
           <div className="text-[15px] font-semibold text-white">Engine assignment</div>
@@ -218,9 +300,18 @@ export default function AiConfigurationPage() {
           engine={modal.engine}
           existingKey={modal.existingKey}
           onClose={() => setModal(null)}
-          onSave={saveKey}
+          onSave={save}
         />
       )}
     </main>
   );
+}
+
+function describe(error) {
+  const body = error?.body;
+  if (!body) return error?.message ?? "Request failed";
+  if (typeof body === "string") return body;
+  if (body.detail) return String(body.detail);
+  const first = Object.entries(body)[0];
+  return first ? `${first[0]}: ${[].concat(first[1]).join(", ")}` : "Request failed";
 }

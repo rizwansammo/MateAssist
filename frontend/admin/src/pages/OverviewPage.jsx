@@ -6,13 +6,11 @@ import { SEED_HEALTH, SEED_USAGE } from "../seed/platform.js";
 
 export default function OverviewPage() {
   const navigate = useNavigate();
-  const { tenantStats, keyStats } = useAdmin();
+  const { tenantStats, pools } = useAdmin();
 
-  const text = keyStats("text");
-  const vision = keyStats("vision");
-  const activeKeys = text.active + vision.active;
-  const poolKeys = text.pool + vision.pool;
-  const limited = text.limited + vision.limited;
+  const activeKeys = pools.TEXT.active + pools.VISION.active;
+  const poolKeys = pools.TEXT.pool + pools.VISION.pool;
+  const limited = pools.TEXT.rate_limited + pools.VISION.rate_limited;
 
   return (
     <main className="flex flex-col gap-6 px-6 pb-12 pt-7">

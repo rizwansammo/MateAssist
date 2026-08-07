@@ -57,7 +57,5 @@ class SubdomainMiddleware:
 
         with transaction.atomic(), tenant_context(tenant.id):
             with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT set_config('app.tenant_id', %s, true)", [str(tenant.id)]
-                )
+                cursor.execute("SELECT set_config('app.tenant_id', %s, true)", [str(tenant.id)])
             return self.get_response(request)

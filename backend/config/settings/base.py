@@ -55,15 +55,15 @@ THIRD_PARTY_APPS = [
 # they exist now so migrations and imports have a stable home and later phases
 # only add files rather than restructure.
 LOCAL_APPS = [
-    "apps.core",           # health, shared utilities              Phase 1
-    "apps.tenancy",        # Tenant, Membership, RLS                Phase 2
-    "apps.accounts",       # User, auth                             Phase 2
-    "apps.helpdesk",       # Ticket, Category, SLA                  Phase 3
-    "apps.ai",             # vault, engine clients, router          Phase 4
-    "apps.knowledge",      # Document, chunks, ingestion            Phase 5
-    "apps.chat",           # Conversation, retrieval, SSE           Phase 6
-    "apps.metering",       # UsageEvent, ModelPrice, rollups        Phase 7
-    "apps.audit",          # AuditEvent                             Phase 7
+    "apps.core",  # health, shared utilities              Phase 1
+    "apps.tenancy",  # Tenant, Membership, RLS                Phase 2
+    "apps.accounts",  # User, auth                             Phase 2
+    "apps.helpdesk",  # Ticket, Category, SLA                  Phase 3
+    "apps.ai",  # vault, engine clients, router          Phase 4
+    "apps.knowledge",  # Document, chunks, ingestion            Phase 5
+    "apps.chat",  # Conversation, retrieval, SSE           Phase 6
+    "apps.metering",  # UsageEvent, ModelPrice, rollups        Phase 7
+    "apps.audit",  # AuditEvent                             Phase 7
     "apps.platformadmin",  # super-admin-only API surface           Phase 4+
 ]
 
@@ -136,8 +136,10 @@ AUTH_USER_MODEL = "accounts.User"
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-     "OPTIONS": {"min_length": 12}},
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 12},
+    },
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
@@ -160,7 +162,7 @@ REST_FRAMEWORK = {
 SPECTACULAR_SETTINGS = {
     "TITLE": "MateAssist API",
     "DESCRIPTION": "Multi-tenant agentic IT helpdesk. DeepSeek reasons over text; "
-                   "Gemini describes images. See docs/DECISIONS.md.",
+    "Gemini describes images. See docs/DECISIONS.md.",
     "VERSION": "0.1.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "SCHEMA_PATH_PREFIX": "/api/v1",
@@ -254,9 +256,7 @@ S3_SECRET_ACCESS_KEY = env("S3_SECRET_ACCESS_KEY", default="")
 S3_REGION = env("S3_REGION", default="us-east-1")
 
 UPLOAD_MAX_BYTES = env.int("UPLOAD_MAX_BYTES", default=52428800)
-UPLOAD_ALLOWED_EXTENSIONS = env.list(
-    "UPLOAD_ALLOWED_EXTENSIONS", default=[".pdf", ".docx", ".md"]
-)
+UPLOAD_ALLOWED_EXTENSIONS = env.list("UPLOAD_ALLOWED_EXTENSIONS", default=[".pdf", ".docx", ".md"])
 
 # ---------------------------------------------------------- i18n/static -----
 
@@ -283,7 +283,6 @@ LOGGING = {
     },
     "root": {"handlers": ["console"], "level": env("LOG_LEVEL", default="INFO")},
     "loggers": {
-        "django.db.backends": {"level": "WARNING", "propagate": False,
-                               "handlers": ["console"]},
+        "django.db.backends": {"level": "WARNING", "propagate": False, "handlers": ["console"]},
     },
 }

@@ -14,10 +14,10 @@ const NAV = [
 ];
 
 function Sidebar() {
-  const { tenantStats, keyStats } = useAdmin();
-  const text = keyStats("text");
-  const vision = keyStats("vision");
-  const anyLimited = text.limited + vision.limited > 0;
+  const { tenantStats, pools } = useAdmin();
+  const text = pools.TEXT;
+  const vision = pools.VISION;
+  const anyLimited = text.rate_limited + vision.rate_limited > 0;
 
   return (
     <aside className="sticky top-0 hidden h-screen flex-col border-r border-slate-800 bg-[#07101C] lg:flex">
@@ -70,7 +70,7 @@ function Sidebar() {
                     anyLimited ? "bg-amber-950 text-amber-400" : "bg-emerald-950 text-emerald-300"
                   }`}
                 >
-                  {text.active + vision.active}/{text.pool + vision.pool}
+                  {text.active + vision.active}/{text.pool + vision.pool || 0}
                 </span>
               )}
             </NavLink>

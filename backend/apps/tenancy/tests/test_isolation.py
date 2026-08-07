@@ -59,14 +59,12 @@ def test_connection_role_cannot_bypass_rls():
     while proving nothing at all.
     """
     with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user"
-        )
+        cursor.execute("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")
         can_bypass = cursor.fetchone()[0]
 
-    assert can_bypass is False, (
-        "the application database role can bypass RLS - isolation is decorative"
-    )
+    assert (
+        can_bypass is False
+    ), "the application database role can bypass RLS - isolation is decorative"
 
 
 def test_policy_is_enabled_and_forced():

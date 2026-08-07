@@ -26,9 +26,10 @@ def test_health_is_reachable_without_authentication() -> None:
     this guards the explicit AllowAny opt-out against being lost in a refactor.
     """
     response = APIClient().get(reverse("core:health"))
-    assert response.status_code not in (401, 403), (
-        "health must stay public; the AllowAny opt-out in HealthView was lost"
-    )
+    assert response.status_code not in (
+        401,
+        403,
+    ), "health must stay public; the AllowAny opt-out in HealthView was lost"
 
 
 def test_health_payload_shape(client) -> None:
@@ -54,9 +55,7 @@ def test_health_reports_503_only_for_required_failures(client) -> None:
     response = client.get(reverse("core:health"))
     body = response.json()
 
-    required_failed = any(
-        c["status"] == health.ERROR and c["required"] for c in body["checks"]
-    )
+    required_failed = any(c["status"] == health.ERROR and c["required"] for c in body["checks"])
     assert response.status_code == (503 if required_failed else 200)
 
 
@@ -121,7 +120,9 @@ def test_vector_column_and_hnsw_index_work_at_configured_dimension() -> None:
             f"CREATE INDEX probe_hnsw ON probe USING hnsw (e vector_cosine_ops) "
             f"WITH (m = {settings.HNSW_M}, ef_construction = {settings.HNSW_EF_CONSTRUCTION})"
         )
-        cur.execute("SELECT id FROM probe ORDER BY e <=> (SELECT e FROM probe WHERE id = 1) LIMIT 1")
+        cur.execute(
+            "SELECT id FROM probe ORDER BY e <=> (SELECT e FROM probe WHERE id = 1) LIMIT 1"
+        )
         nearest = cur.fetchone()[0]
 
     assert nearest == 1, "the <=> cosine operator did not return the expected neighbour"
@@ -151,12 +152,13 @@ def test_embedding_dim_matches_the_locked_decision() -> None:
         ([("database", health.OK, True)], health.OK),
         # An optional dependency being down must not take the service down: a
         # missing Celery worker is normal in dev and during a rolling restart.
-        ([("database", health.OK, True), ("celery_workers", health.DEGRADED, False)],
-         health.DEGRADED),
+        (
+            [("database", health.OK, True), ("celery_workers", health.DEGRADED, False)],
+            health.DEGRADED,
+        ),
         ([("database", health.ERROR, True)], health.ERROR),
         # A required ERROR outranks an optional OK.
-        ([("database", health.ERROR, True), ("celery_workers", health.OK, False)],
-         health.ERROR),
+        ([("database", health.ERROR, True), ("celery_workers", health.OK, False)], health.ERROR),
     ],
 )
 def test_overall_status_folding(checks, expected) -> None:

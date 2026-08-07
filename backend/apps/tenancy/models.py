@@ -80,9 +80,7 @@ class Membership(models.Model):
     class Meta:
         ordering = ("tenant__name", "user__email")
         constraints = [
-            models.UniqueConstraint(
-                fields=["user", "tenant"], name="uniq_membership_user_tenant"
-            ),
+            models.UniqueConstraint(fields=["user", "tenant"], name="uniq_membership_user_tenant"),
             models.CheckConstraint(
                 name="platform_owner_has_no_tenant",
                 condition=(
