@@ -1,0 +1,68 @@
+# ── Secrets ───────────────────────────────────────────────────────────────
+# .env holds POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD, DJANGO_SECRET_KEY and
+# MATEASSIST_VAULT_KEY (D-071). It must never be committed. Only .env.example is.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!**/fonts/*.otf
+
+# ── Python (D-001: 3.12) ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ── Django ────────────────────────────────────────────────────────────────
+*.log
+db.sqlite3
+db.sqlite3-journal
+/backend/staticfiles/
+/backend/mediafiles/
+celerybeat-schedule*
+
+# ── ML model cache (D-060: bge-small-en-v1.5 weights, ~130 MB) ────────────
+.cache/
+/.cache/huggingface/
+*.safetensors
+*.onnx
+
+# ── Node / Vite ───────────────────────────────────────────────────────────
+node_modules/
+.vite/
+dist/
+dist-ssr/
+*.local
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── Docker / infra local state ────────────────────────────────────────────
+/infra/data/
+/infra/.env
+
+# ── Editors & OS ──────────────────────────────────────────────────────────
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,131 @@
+# MateAssist — local development infrastructure (D-010)
+# ============================================================================
+# Services only. Django and the Celery worker run on the HOST against Python
+# 3.12 (D-014) to avoid Windows bind-mount I/O cost and to keep the ~130 MB
+# embedding-model cache (D-060) warm between restarts.
+#
+# Do not invoke this file directly — the env contract lives at the repo root,
+# not here. Use the wrappers, which pass --env-file ../.env:
+#     pwsh infra/scripts/up.ps1
+#     pwsh infra/scripts/verify.ps1
+#     pwsh infra/scripts/down.ps1
+#
+# Host ports are deliberately non-default (5433 / 6380) — native postgres and
+# redis services already hold 5432 / 6379 on this machine. See amendment A-001.
+# ============================================================================
+
+name: mateassist
+
+services:
+  postgres:
+    # Pinned to the minor tag, not :latest — a silent major bump would break
+    # the on-disk data directory format.
+    image: pgvector/pgvector:pg17
+    container_name: mateassist-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      # Deterministic collation — ordering must not drift with the host locale.
+      LANG: C
+    command:
+      - postgres
+      # RLS (D-020) is the isolation guarantee. Log any statement that errors so
+      # a policy denial is always visible in development rather than silent.
+      - -c
+      - log_min_error_statement=error
+      - -c
+      - max_connections=100
+      # HNSW index builds (D-057) are memory-hungry; give them room in dev.
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - shared_buffers=256MB
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    container_name: mateassist-redis
+    restart: unless-stopped
+    # Persist the Celery broker so an in-flight ingestion chain survives a
+    # container restart instead of silently vanishing.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  minio:
+    image: minio/minio:latest
+    container_name: mateassist-minio
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # One-shot bucket bootstrap. Exits 0 and stays exited — that is success, not
+  # a crash. `up.ps1` waits on it before reporting the stack ready.
+  minio-init:
+    image: minio/mc:latest
+    container_name: mateassist-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-mateassist-documents}
+    entrypoint: ["/bin/sh", "-c"]
+    # $$ escapes compose interpolation so the container shell expands these.
+    command:
+      - |
+        set -e
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
+        mc mb --ignore-existing "local/$$S3_BUCKET_NAME"
+        # Tenant runbooks are never public. Access is always via signed URLs
+        # minted by Django after a tenancy check (D-020).
+        mc anonymous set none "local/$$S3_BUCKET_NAME"
+        mc version enable "local/$$S3_BUCKET_NAME"
+        echo "bootstrap-complete bucket=$$S3_BUCKET_NAME"
+    restart: "no"
+
+volumes:
+  postgres-data:
+    name: mateassist-postgres-data
+  redis-data:
+    name: mateassist-redis-data
+  minio-data:
+    name: mateassist-minio-data
+
+networks:
+  default:
+    name: mateassist-net
