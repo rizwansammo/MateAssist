@@ -42,9 +42,9 @@ Decision IDs (`D-nnn`) are referenced from commit messages, ADRs and code commen
 - **Port 6379 conflict.** A native Redis (`taizod1024.redis-windows-fork`) is installed on this
   machine. It must be stopped before `docker compose up`, or D-012 remaps to `6380`. The compose
   file is the source of truth; the native install is abandoned.
-- **Subdomain dev.** Tenant resolution is host-based (D-021). Chrome and Firefox resolve
-  `*.localhost` to `127.0.0.1` without a hosts-file edit, so `netswitch.localhost:5173` works
-  out of the box. Safari does not — not a supported dev browser.
+- **Subdomain dev.** Tenant resolution is host-based (D-021). See amendment **A-007** — the
+  original claim here (that `*.localhost` resolves without configuration) is only true inside
+  Chromium and Firefox, not for the OS resolver, and the strategy is settled in Phase 2.
 - **Dev ports.** Django `8000` · portal `5173` · admin `5174`.
 
 ---
@@ -378,7 +378,8 @@ ErrorRecord and sets `$?` to `$false` — even when the process exits 0. Under
 (`database "..." does not exist, skipping` from `DROP DATABASE IF EXISTS`) therefore
 aborted the entire Phase 0 gate.
 
-Constraints, applying to every script that shells out:
+Constraints, applying to every script that shells out (see A-007 for the tenancy-dev
+correction that Phase 1 surfaced):
 
 1. **`$LASTEXITCODE` is the only authoritative success signal for a native command.**
    Never `$?`, never the absence of stderr.
@@ -413,3 +414,42 @@ Corrected in two ways rather than by loosening the match:
 Principle carried forward: where a decision asserts a security property, the test
 exercises the property. D-025's cross-tenant RLS gate already follows this — it
 bypasses the ORM and asserts the database still denies the read.
+
+---
+
+### A-007 — `*.localhost` does not resolve outside the browser
+**Date:** 2026-08-07 · **Amends:** D-010 dev note, D-021 · **Migration cost:** none
+**Status:** open decision, owned by Phase 2
+
+The Phase 0 note claimed `netswitch.localhost` resolves to `127.0.0.1` without configuration.
+Measured in Phase 1, that is **only half true**, and the half that fails is the one automated
+tests depend on:
+
+```
+[Dns]::GetHostAddresses("netswitch.localhost")  ->  No such host is known
+Invoke-WebRequest http://netswitch.localhost:5175/  ->  could not be resolved
+```
+
+Chromium and Firefox special-case `*.localhost` internally (RFC 6761), so a developer
+clicking around a tenant subdomain works. **Every non-browser client fails**: the Windows OS
+resolver has no wildcard entry, so PowerShell, curl, Python `requests`, Node `fetch` and any
+integration test asserting tenant isolation over HTTP cannot reach it.
+
+Compounding it, Vite's default `server.host: "localhost"` binds **`::1` only**, while browsers
+map `*.localhost` to IPv4 `127.0.0.1` — so even in a browser the dev server would have been
+unreachable on a tenant subdomain.
+
+**Fixed now:** both Vite configs set `server.host: true`, binding all interfaces. This exposes
+the dev server on the LAN; acceptable for a development machine, and it is never how
+production serves (D-141).
+
+**Left open for Phase 2**, because the tenancy middleware is what actually needs it:
+
+| Option | Trade-off |
+|---|---|
+| Hosts-file entries per dev tenant | Works everywhere; needs Administrator and manual upkeep per tenant |
+| A wildcard DNS service (`lvh.me`, `nip.io`) | No admin, resolves for OS and browser alike; requires internet and trusts a third-party resolver |
+| `X-Tenant` header override in dev only | No DNS at all, but diverges from the production Host-header path — the riskiest, since the thing under test stops being the thing that ships |
+
+Recorded rather than settled: picking one belongs with the middleware that consumes it, and
+D-025's isolation gate is what will prove the choice works.

@@ -1,0 +1,19 @@
+{
+  "name": "admin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MateAssist Central Super Admin Panel - served only on admin.mateassist.io, never on a tenant subdomain (D-145)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@mateassist/ui": "*",
+    "lucide-react": "^0.436.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.1"
+  }
+}

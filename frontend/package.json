@@ -1,0 +1,27 @@
+{
+  "name": "mateassist-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MateAssist frontends. Two separate bundles by design (D-145): the admin bundle is never served to a tenant subdomain.",
+  "workspaces": [
+    "packages/*",
+    "portal",
+    "admin"
+  ],
+  "scripts": {
+    "dev:portal": "npm run dev --workspace portal",
+    "dev:admin": "npm run dev --workspace admin",
+    "build": "npm run build --workspace portal && npm run build --workspace admin",
+    "build:portal": "npm run build --workspace portal",
+    "build:admin": "npm run build --workspace admin",
+    "lint:radius": "node scripts/check-radius.mjs"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.41",
+    "tailwindcss": "^3.4.10",
+    "vite": "^5.4.2"
+  }
+}

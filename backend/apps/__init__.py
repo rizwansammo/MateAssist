@@ -1,0 +1,1 @@
+"""MateAssist bounded contexts."""

@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Wordmark font. Resolved relative to this file so a single .otf serves both
+ * apps - Vite fingerprints and emits it per bundle. Copying it into each app's
+ * public/ would create a second source of truth for a design-system asset.
+ */
+@font-face {
+  font-family: "HemiHead";
+  src: url("../../fonts/HemiHead-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-display: swap;
+}
+
+@layer base {
+  /*
+   * D-100: geometric precision, no exceptions.
+   *
+   * This global rule is the GUARANTEE - it cannot be forgotten on a new
+   * component, and it defeats border-radius baked into third-party CSS.
+   * Primitives additionally carry an explicit `rounded-none`, which is the
+   * INTENT: it makes the rule visible at the call site instead of spooky
+   * action from a stylesheet. Belt and braces, deliberately.
+   */
+  * {
+    border-radius: 0 !important;
+  }
+
+  body {
+    @apply font-sans bg-slate-100 text-ink antialiased;
+  }
+
+  input:focus {
+    outline: 2px solid #10b981;
+    outline-offset: -2px;
+  }
+
+  a {
+    @apply text-emerald-700 no-underline;
+  }
+
+  a:hover {
+    @apply text-emerald-800;
+  }
+}
