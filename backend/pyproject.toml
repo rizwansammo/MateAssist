@@ -1,3 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# This project is a Django application, not a distributable library. pyproject
+# exists for dependency metadata and tool config only, so setuptools is told to
+# package nothing: without this it auto-discovers `apps` and `config` as two
+# top-level packages in a flat layout and refuses to guess which is the
+# distribution. Django imports them from the working directory via manage.py,
+# never from site-packages.
+[tool.setuptools]
+py-modules = []
+
 [project]
 name = "mateassist-backend"
 version = "0.1.0"
@@ -16,6 +29,9 @@ dependencies = [
     "django-cors-headers>=4.4",
     "pgvector>=0.3",
     "uvicorn[standard]>=0.30",              # D-003: ASGI, required for SSE
+    "cryptography>=43",                     # D-071: AES-256-GCM vault
+    "openai>=1.40",                         # D-040: DeepSeek is OpenAI-compatible
+    "google-genai>=0.3",                    # D-041: Gemini vision
 ]
 
 [project.optional-dependencies]

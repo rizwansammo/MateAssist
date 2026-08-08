@@ -102,7 +102,7 @@ or isolation breaks silently. Mitigation: the setting is always issued inside an
 |---|---|---|
 | Primary RAG answering + tool calling | **`deepseek-chat`** | OpenAI-compatible API at `https://api.deepseek.com`; used via the `openai` SDK with a custom `base_url` |
 | Escalation triage (optional, Phase 6+) | **`deepseek-reasoner`** | Reserved for hard diagnostic turns. Not on the default path — higher latency and token cost |
-| Image description / OCR | **`gemini-2.5-flash`** | Via the `google-genai` SDK |
+| Image description / OCR | ~~`gemini-2.5-flash`~~ → **`gemini-3.6-flash`** | **Amended by A-009** — the original pin is deprecated and 404s. Via the `google-genai` SDK |
 | Embeddings | **`BAAI/bge-small-en-v1.5`** | Local, see D-060 |
 
 > **VERIFICATION GATE (Phase 1, blocking).** These IDs are pinned from documentation current as
@@ -503,3 +503,47 @@ there is nothing to unwind.
 **New configuration required (Phase 6):** `Tenant.support_email`, an SMTP/SendGrid credential
 set, and `DEFAULT_FROM_EMAIL`. The provider credential belongs in the same encrypted vault as
 the AI keys (D-070/D-071) rather than in `.env`, since it is a rotatable third-party secret.
+
+---
+
+### A-009 — The pinned Gemini model was already dead
+**Date:** 2026-08-08 · **Amends:** §5 model pins · **Migration cost:** none — an `.env` change
+
+The O-3 verification gate finally ran, and the pin failed on first contact.
+
+`gemini-2.5-flash` — pinned since Phase 0 from documentation — returns:
+
+```
+404 NOT_FOUND: This model models/gemini-2.5-flash is no longer available to
+new users. Please update your code to use a newer model.
+```
+
+`gemini-2.5-flash-lite` is dead the same way. **New pin: `gemini-3.6-flash`**, verified by a
+real image call that correctly described a generated test image. `gemini-3.5-flash` and
+`gemini-flash-latest` also work and are documented fallbacks.
+
+**Three things this proved, none of which a unit test could have:**
+
+1. **`models.list()` cannot be trusted.** `gemini-2.5-flash` is *listed* by the API and then
+   404s when called. Any verification that only checks the catalogue is theatre — which is why
+   `verify_providers` makes a real minimal call per engine.
+2. **A per-call SDK client is a bug.** `genai.Client(...)` builds an httpx transport that closes
+   when the object is collected, so a throwaway client can be shut down mid-request
+   (*"the client has been closed"*). Both engines now cache the client on the instance.
+3. **D-045 was right and is now proven.** Model ids being configuration rather than constants
+   meant this deprecation cost one `.env` line, not a refactor.
+
+**Operational findings for Phase 5:**
+
+- **A 96×96 image costs ~1,100 input tokens.** Image tokens dominate ingestion: a 200-image
+  runbook is ~220k tokens before any text. This is the number D-058's dedupe and
+  minimum-size threshold exist to control, and it is larger than assumed.
+- **The free tier exhausts quickly** — a handful of probe calls rate-limited
+  `gemini-2.0-flash`. The Phase 4 key pool (round-robin, 429 cooldown, failover) is exactly the
+  mitigation, but it needs **more than one key** to fail over to. Recommend 2–3 free keys before
+  ingesting anything sizeable.
+- **Google's API key format changed** to `AQ.…`; the older `AIzaSy…` assumption is stale and has
+  been removed from the verification command's guidance.
+
+**Standing rule:** re-run `manage.py verify_providers` whenever a model pin changes, and treat a
+green result as perishable. This one was stale within months.

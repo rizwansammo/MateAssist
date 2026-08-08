@@ -46,11 +46,20 @@ class VisionEngine:
     def __init__(self, api_key: str, *, model: str | None = None):
         self.model = model or settings.GEMINI_MODEL_VISION
         self._api_key = api_key
+        self._cached_client = None
 
     def _client(self):
-        from google import genai
+        # Held on the instance rather than built per call. The SDK client owns an
+        # httpx transport that closes when the object is collected, so a
+        # throwaway `genai.Client(...).models.generate_content(...)` can be shut
+        # down before the request completes - "the client has been closed".
+        # Caught by verify_providers on the first live call; no unit test could
+        # have found it, because none of them reach the network.
+        if self._cached_client is None:
+            from google import genai
 
-        return genai.Client(api_key=self._api_key)
+            self._cached_client = genai.Client(api_key=self._api_key)
+        return self._cached_client
 
     def describe(
         self, image_bytes: bytes, *, mime_type: str, purpose: str = "runbook"

@@ -78,13 +78,21 @@ class TextEngine:
         self.model = model or settings.DEEPSEEK_MODEL_CHAT
         self._base_url = base_url or settings.DEEPSEEK_API_BASE
         self._api_key = api_key
+        self._cached_client = None
 
     def _client(self):
         # Imported lazily so the module can be imported (and the guard tested)
-        # without the SDK or a network stack present.
-        from openai import OpenAI
+        # without the SDK or a network stack present. Cached on the instance for
+        # the same reason as VisionEngine: a per-call client can have its
+        # transport closed out from under an in-flight request, and it also
+        # forces a new connection pool on every turn.
+        if self._cached_client is None:
+            from openai import OpenAI
 
-        return OpenAI(api_key=self._api_key, base_url=self._base_url, timeout=60.0)
+            self._cached_client = OpenAI(
+                api_key=self._api_key, base_url=self._base_url, timeout=60.0
+            )
+        return self._cached_client
 
     def complete(
         self,
