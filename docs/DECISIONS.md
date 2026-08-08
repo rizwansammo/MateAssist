@@ -469,6 +469,18 @@ production serves (D-141).
 Recorded rather than settled: picking one belongs with the middleware that consumes it, and
 D-025's isolation gate is what will prove the choice works.
 
+**Follow-up (2026-08-08): the dev proxy must not rewrite the Host header.**
+Both Vite configs originally set `changeOrigin: true`, the usual default when proxying to an
+API. That rewrites `Host` to the proxy target, so Django saw `127.0.0.1:8000`, resolved no
+tenant, and **every workspace sign-in failed with "Invalid credentials"** — an auth-shaped
+symptom with a proxy-shaped cause.
+
+`changeOrigin` is now `false` in both apps, with a comment saying why. The admin panel hid the
+bug because the platform surface *wants* no tenant, so it worked for the wrong reason; only the
+portal exposed it. Verified after the fix: a netswitch user authenticates on
+`netswitch.localhost`, is refused on `apptriangle.localhost`, and the platform host still
+resolves to no tenant.
+
 ---
 
 ### A-008 — Internal ticketing replaced by an SMTP handoff

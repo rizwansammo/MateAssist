@@ -23,7 +23,10 @@ export default defineConfig(({ mode }) => {
       proxy: {
         "/api": {
           target: `http://127.0.0.1:${env.DJANGO_PORT || 8000}`,
-          changeOrigin: true
+          // Must match the portal: see the note there. The admin host resolves
+          // to no tenant anyway, so this surface would work either way - which
+          // is exactly why the bug hid here and only showed up on the portal.
+          changeOrigin: false
         }
       }
     },

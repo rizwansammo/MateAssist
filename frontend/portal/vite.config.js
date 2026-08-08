@@ -34,7 +34,13 @@ export default defineConfig(({ mode }) => {
       proxy: {
         "/api": {
           target: `http://127.0.0.1:${env.DJANGO_PORT || 8000}`,
-          changeOrigin: true
+          // changeOrigin MUST stay false. It rewrites the Host header to the
+          // proxy target, and the Host header is how the backend resolves which
+          // tenant a request belongs to (D-021). With it enabled Django sees
+          // 127.0.0.1:8000, resolves no tenant, and every workspace sign-in
+          // fails with "Invalid credentials" - which looks like an auth bug and
+          // is actually a proxy bug.
+          changeOrigin: false
         }
       }
     },
