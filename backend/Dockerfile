@@ -25,8 +25,20 @@ COPY apps ./apps
 COPY config ./config
 COPY manage.py ./
 
+# Torch is installed FIRST, from the CPU-only index.
+#
+# sentence-transformers depends on torch, and pip's default wheel is the CUDA
+# build: several gigabytes of GPU libraries that this image can never use, since
+# neither the CI runner nor the VPS has a GPU. Left to resolve normally it filled
+# the GitHub runner's disk and killed the job mid-step - a build that fails with
+# no log rather than an error message.
+#
+# Installing it explicitly from download.pytorch.org/whl/cpu first means the
+# dependency is already satisfied when `pip install .` runs, so the CUDA wheel is
+# never fetched. Roughly 2GB smaller, and considerably faster to build.
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
+    && /opt/venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch \
     && /opt/venv/bin/pip install .
 
 # ---------------------------------------------------------------- runtime ----

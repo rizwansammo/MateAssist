@@ -53,6 +53,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The backend image installs torch and the transformers stack. A
+      # GitHub-hosted runner starts with roughly 14GB free, and between the
+      # preinstalled Android SDK, .NET and CodeQL images there is enough
+      # baggage to run it out of space mid-build - which kills the job with no
+      # log rather than an error. Reclaiming what we will never use costs about
+      # 30 seconds and removes an entire class of unexplainable failure.
+      - name: Reclaim runner disk
+        if: matrix.name == 'backend'
+        run: |
+          echo "before: $(df -h / | awk 'NR==2{print $4}') free"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune -af
+          echo "after:  $(df -h / | awk 'NR==2{print $4}') free"
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -88,7 +103,10 @@ jobs:
           build-args: |
             APP=${{ matrix.app }}
           cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          # `min` for the backend: `max` also exports every intermediate layer,
+          # and the builder stage here contains the whole torch install. Caching
+          # it costs more disk on the runner than it saves in build time.
+          cache-to: type=gha,mode=${{ matrix.name == 'backend' && 'min' || 'max' }},scope=${{ matrix.name }}
 
       - name: Summary
         run: echo "Published ${{ steps.tags.outputs.image }}" >> "$GITHUB_STEP_SUMMARY"
