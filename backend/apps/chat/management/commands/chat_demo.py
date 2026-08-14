@@ -18,6 +18,7 @@ from django.db import connection, transaction
 
 from apps.ai import router
 from apps.chat import prompts, retrieval
+from apps.core.demo_guard import refuse_in_production
 from apps.tenancy.context import tenant_context
 from apps.tenancy.models import Tenant
 
@@ -35,6 +36,9 @@ class Command(BaseCommand):
         parser.add_argument("--question", default=None)
 
     def handle(self, *args, **options):
+        refuse_in_production(
+            self, what="conversations and metered provider usage against real quota"
+        )
         tenant = Tenant.objects.filter(slug=options["tenant"]).first()
         if tenant is None:
             self.stderr.write(f"No tenant '{options['tenant']}'. Run seed_dev first.")

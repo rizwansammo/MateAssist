@@ -22,6 +22,7 @@ from django.core.management.base import BaseCommand
 from django.db import connection, transaction
 
 from apps.ai.models import Engine, ProviderKey
+from apps.core.demo_guard import refuse_in_production
 from apps.knowledge import storage
 from apps.knowledge.models import Document, DocumentAsset, DocumentChunk, FileType
 from apps.knowledge.tasks import ingest_document
@@ -141,6 +142,7 @@ class Command(BaseCommand):
         parser.add_argument("--tenant", default="netswitch")
 
     def handle(self, *args, **options):
+        refuse_in_production(self, what='a fabricated "VPN Runbook (demo)" into the knowledge base')
         tenant = Tenant.objects.filter(slug=options["tenant"]).first()
         if tenant is None:
             self.stderr.write(f"No tenant '{options['tenant']}'. Run seed_dev first.")

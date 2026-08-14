@@ -14,6 +14,7 @@ from django.db import connections, transaction
 from django.utils import timezone
 
 from apps.ai.models import ModelPrice
+from apps.core.demo_guard import refuse_in_production
 from apps.tenancy.models import Membership, Role, Tenant
 
 PASSWORD = "MateAssist!2026"
@@ -56,6 +57,10 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        refuse_in_production(
+            self,
+            what="development tenants (Netswitch, Apptriangle) with a repository password",
+        )
         alias = options.get("database") or "admin"
         User = get_user_model()
         connection = connections[alias]

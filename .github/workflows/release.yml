@@ -1,0 +1,94 @@
+# Build and publish the three production images to GHCR.
+#
+# Triggered by a version tag, or manually. Deliberately NOT on every push to
+# main: an image per commit fills the registry with builds nobody deployed, and
+# makes "which image is live?" a question with a fuzzy answer.
+#
+# Deployment is a separate, manual step on the VPS. That is a choice, not an
+# omission - see docs/DEPLOY.md. A push-to-deploy pipeline on a box that also
+# runs three other people-facing apps means one bad merge takes them all down
+# with it.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (defaults to the commit SHA)"
+        required: false
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: rizwansammo
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      # Fail-fast off: if the admin image fails to build, still publish the
+      # other two rather than leaving a half-known state.
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: ./backend
+            dockerfile: ./backend/Dockerfile
+            app: ""
+          - name: portal
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+            app: portal
+          - name: admin
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+            app: admin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve tags
+        id: tags
+        run: |
+          IMAGE="${REGISTRY}/${OWNER}/mateassist-${{ matrix.name }}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="${{ inputs.tag }}"
+            [ -n "$VERSION" ] || VERSION="${GITHUB_SHA}"
+          fi
+          # Both a moving `latest` and an immutable version tag. The compose file
+          # defaults to latest for convenience; pin the version tag in .env when
+          # you need to know exactly what is running, or to roll back.
+          echo "tags=${IMAGE}:${VERSION},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}:${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            APP=${{ matrix.app }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      - name: Summary
+        run: echo "Published ${{ steps.tags.outputs.image }}" >> "$GITHUB_STEP_SUMMARY"

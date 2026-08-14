@@ -1,0 +1,165 @@
+# Production stack for /opt/MateAssist on MateServer (169.58.114.252).
+#
+# Follows the shape already established by the other apps on this box:
+#
+#   * nothing binds a public port. Every service listens on 127.0.0.1 only and
+#     the host's existing nginx proxies to it, so ports 80/443 and the MateDesk,
+#     NetaMate and TalkRoom stacks are untouched.
+#   * Postgres, Redis and MinIO have NO host port at all. The host itself
+#     already runs a Postgres on 5432 and a Redis on 6379 for other apps;
+#     publishing ours would collide with them. They are reachable only from the
+#     app containers over the internal bridge.
+#   * images come from GHCR by tag. `build:` is a fallback for a first deploy
+#     from a checkout, before CI has published anything.
+#
+# Ports claimed on the loopback, chosen against what was already listening:
+#   8010 backend   3010 portal   3011 admin
+#
+# There is no pgAdmin, no exposed database console and no MinIO console. An
+# admin UI on a public port outside nginx is how a database ends up on the
+# internet; use `docker compose exec postgres psql` or an SSH tunnel.
+
+name: mateassist
+
+services:
+
+  # ── PostgreSQL 17 + pgvector ────────────────────────────────────────────────
+  # pgvector is not optional: retrieval is a vector search over the runbook
+  # corpus, and the extension is created by migration 0002.
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-mateassist}
+      POSTGRES_USER:     ${POSTGRES_USER:-mateassist}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      # Read by the init script to create the NOSUPERUSER application role.
+      APP_DB_USER:       ${APP_DB_USER:-mateassist_app}
+      APP_DB_PASSWORD:   ${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set - without it RLS is decorative}
+    volumes:
+      - mateassist_pgdata:/var/lib/postgresql/data
+      # Creates the NOSUPERUSER application role on first boot. Without it the
+      # app connects as the owner, PostgreSQL exempts superusers from RLS
+      # unconditionally, and every isolation policy in the database enforces
+      # nothing while appearing to be in place (D-020).
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    networks: [internal]
+    healthcheck:
+      test:         ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mateassist} -d ${POSTGRES_DB:-mateassist}"]
+      interval:     10s
+      timeout:      5s
+      retries:      5
+      start_period: 20s
+
+  # ── Redis — this app's own, separate from the host's ────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - mateassist_redis:/data
+    networks: [internal]
+    healthcheck:
+      test:     ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout:  3s
+      retries:  5
+
+  # ── MinIO — uploaded runbooks and chat screenshots ──────────────────────────
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data
+    environment:
+      MINIO_ROOT_USER:     ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
+    volumes:
+      - mateassist_minio:/data
+    networks: [internal]
+    healthcheck:
+      test:     ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout:  5s
+      retries:  5
+
+  # ── Django / Gunicorn with Uvicorn workers ──────────────────────────────────
+  backend:
+    image: ${MATEASSIST_BACKEND_IMAGE:-ghcr.io/rizwansammo/mateassist-backend:latest}
+    build:
+      context:    ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8010}:8010"
+    env_file: [.env]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+      minio:    {condition: service_started}
+    networks: [internal]
+    volumes:
+      # The local embedding model, cached across restarts. Without this the
+      # weights are re-downloaded on every deploy and the first request after a
+      # restart waits minutes for them.
+      - mateassist_hfcache:/app/.cache/huggingface
+
+  # ── Celery worker — document ingestion, image description, indexing ─────────
+  celery_worker:
+    image: ${MATEASSIST_BACKEND_IMAGE:-ghcr.io/rizwansammo/mateassist-backend:latest}
+    command: celery -A config worker -l info --concurrency=2
+    restart: unless-stopped
+    env_file: [.env]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+    networks: [internal]
+    volumes:
+      - mateassist_hfcache:/app/.cache/huggingface
+
+  # ── Celery beat — scheduled work ────────────────────────────────────────────
+  celery_beat:
+    image: ${MATEASSIST_BACKEND_IMAGE:-ghcr.io/rizwansammo/mateassist-backend:latest}
+    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    restart: unless-stopped
+    env_file: [.env]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+    networks: [internal]
+
+  # ── Portal SPA — served on every tenant subdomain ───────────────────────────
+  portal:
+    image: ${MATEASSIST_PORTAL_IMAGE:-ghcr.io/rizwansammo/mateassist-portal:latest}
+    build:
+      context:    ../frontend
+      dockerfile: Dockerfile
+      args:
+        APP: portal
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORTAL_PORT:-3010}:8080"
+    networks: [internal]
+
+  # ── Admin SPA — served at mateassist.site/platform_admin ────────────────────
+  # Built with base=/platform_admin/ (D-147), so this image is NOT
+  # interchangeable with the portal image despite sharing a Dockerfile.
+  admin:
+    image: ${MATEASSIST_ADMIN_IMAGE:-ghcr.io/rizwansammo/mateassist-admin:latest}
+    build:
+      context:    ../frontend
+      dockerfile: Dockerfile
+      args:
+        APP: admin
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-3011}:8080"
+    networks: [internal]
+
+volumes:
+  mateassist_pgdata:
+  mateassist_redis:
+  mateassist_minio:
+  mateassist_hfcache:
+
+networks:
+  internal:
+    driver: bridge

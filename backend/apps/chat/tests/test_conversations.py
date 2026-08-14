@@ -9,7 +9,8 @@ import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
-from apps.chat.models import Conversation, Message, Role as MessageRole
+from apps.chat.models import Conversation, Message
+from apps.chat.models import Role as MessageRole
 from apps.tenancy.models import Membership, Role, Tenant
 from apps.tenancy.tests.test_isolation import set_db_tenant
 

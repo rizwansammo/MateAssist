@@ -27,6 +27,7 @@ from django.core.management.base import BaseCommand
 from django.db import connection, transaction
 
 from apps.ai.models import Engine
+from apps.core.demo_guard import refuse_in_production
 from apps.metering import budgets, rollups
 from apps.metering.models import Operation, TenantBudget, UsageEvent
 from apps.tenancy.context import tenant_context
@@ -71,6 +72,7 @@ class Command(BaseCommand):
     # -- the gate --------------------------------------------------------
 
     def handle(self, *args, **options):
+        refuse_in_production(self, what="synthetic usage events and a temporary budget")
         self.failures: list[str] = []
 
         tenants = list(Tenant.objects.order_by("id")[:2])

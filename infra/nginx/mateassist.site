@@ -1,0 +1,190 @@
+# Nginx server block for mateassist.site - MateAssist.
+#
+# Install as a NEW file and symlink it in. Do not edit any existing site file:
+# MateDesk, NetaMate and TalkRoom keep their own configs untouched.
+#
+#   scp infra/nginx/mateassist.site root@169.58.114.252:/etc/nginx/sites-available/mateassist.site
+#   ln -s /etc/nginx/sites-available/mateassist.site /etc/nginx/sites-enabled/mateassist.site
+#   nginx -t && systemctl reload nginx
+#
+# ── Host layout ───────────────────────────────────────────────────────────────
+#
+#   mateassist.site/                  marketing site (not built yet - holding page)
+#   mateassist.site/platform_admin    the platform admin panel
+#   mateassist.site/api/v1            API, PLATFORM scope (host resolves to no tenant)
+#   *.mateassist.site/                the tenant portal
+#   *.mateassist.site/api/v1          API, TENANT scope (host resolves to a tenant)
+#
+# The split is forced by the code, not chosen: `IsPlatformOwner` refuses any
+# request that resolves to a tenant, and every subdomain of the base domain
+# does. So the platform surface can only live on the apex - which is why the
+# panel is at a PATH there rather than on a subdomain of its own.
+#
+# ── The Host header is load-bearing ───────────────────────────────────────────
+# Django resolves the tenant from the Host header (D-021). `proxy_set_header
+# Host $host` below is therefore not boilerplate: rewriting it would make every
+# tenant request resolve to no tenant, and every login would fail with "invalid
+# credentials" while the admin surface kept working - which is exactly how this
+# hid during development (A-007).
+#
+# ── TLS ───────────────────────────────────────────────────────────────────────
+# The certificate MUST cover *.mateassist.site. A wildcard can only be issued
+# via DNS-01; --nginx, webroot and standalone cannot do it. Issued with:
+#
+#   certbot certonly --dns-cloudflare \
+#     --dns-cloudflare-credentials /root/.cloudflare-mateassist.ini \
+#     --dns-cloudflare-propagation-seconds 30 \
+#     -d mateassist.site -d '*.mateassist.site' --cert-name mateassist.site
+#
+# Renewal is unattended via the existing certbot.timer.
+
+# ── Search-engine visibility by hostname ──────────────────────────────────────
+# Only the apex will be a public marketing site. Every tenant subdomain serves
+# the same login screen, so leaving them crawlable would put one near-identical
+# thin page per customer into the index and expose customer workspace URLs in
+# public results.
+#
+# nginx omits add_header entirely when the value is an empty string.
+map $host $robots_tag {
+    default            "noindex, nofollow";
+    mateassist.site    "";
+    www.mateassist.site "";
+}
+
+# ── HTTP -> HTTPS ─────────────────────────────────────────────────────────────
+server {
+    listen      80;
+    listen      [::]:80;
+    server_name mateassist.site *.mateassist.site;
+
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+# ── www -> apex ───────────────────────────────────────────────────────────────
+# Its own block on purpose. Folded into the wildcard below, "www" would be read
+# as a tenant slug: the portal would render a login screen for a workspace that
+# does not exist, and Django would refuse its API calls.
+server {
+    listen      443 ssl;
+    listen      [::]:443 ssl;
+    http2       on;
+    server_name www.mateassist.site;
+
+    ssl_certificate     /etc/letsencrypt/live/mateassist.site/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mateassist.site/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    return 301 https://mateassist.site$request_uri;
+}
+
+# ── Apex: marketing, platform admin, platform API ─────────────────────────────
+server {
+    listen      443 ssl;
+    listen      [::]:443 ssl;
+    http2       on;
+    server_name mateassist.site;
+
+    ssl_certificate     /etc/letsencrypt/live/mateassist.site/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mateassist.site/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    add_header X-Robots-Tag        $robots_tag              always;
+    add_header X-Content-Type-Options nosniff               always;
+    add_header X-Frame-Options     DENY                     always;
+    add_header Referrer-Policy     strict-origin-when-cross-origin always;
+
+    # Django also emits HSTS when DEBUG=False. Hiding the upstream copy keeps
+    # exactly one, and keeps the edge the single place this is configured.
+    proxy_hide_header Strict-Transport-Security;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    client_max_body_size 25m;   # runbook uploads
+
+    # ---- platform admin panel ----
+    location /platform_admin/ {
+        proxy_pass         http://127.0.0.1:3011/;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+    # Without this, /platform_admin (no trailing slash) 404s rather than
+    # reaching the SPA - the single most common way this layout is reported
+    # broken.
+    location = /platform_admin { return 301 /platform_admin/; }
+
+    # ---- API, platform scope ----
+    location /api/ {
+        proxy_pass         http://127.0.0.1:8010;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+    }
+
+    # ---- marketing site (not built yet) ----
+    # A holding response rather than a redirect to /platform_admin: redirecting
+    # would advertise the admin path to anyone who lands on the domain.
+    location / {
+        default_type text/html;
+        return 200 '<!doctype html><meta charset="utf-8"><title>MateAssist</title><body style="font-family:system-ui;padding:3rem"><h1>MateAssist</h1><p>Coming soon.</p></body>';
+    }
+}
+
+# ── Tenant subdomains: the portal ─────────────────────────────────────────────
+server {
+    listen      443 ssl;
+    listen      [::]:443 ssl;
+    http2       on;
+    server_name *.mateassist.site;
+
+    ssl_certificate     /etc/letsencrypt/live/mateassist.site/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mateassist.site/privkey.pem;
+    include             /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
+
+    add_header X-Robots-Tag        $robots_tag              always;
+    add_header X-Content-Type-Options nosniff               always;
+    add_header X-Frame-Options     DENY                     always;
+    add_header Referrer-Policy     strict-origin-when-cross-origin always;
+
+    proxy_hide_header Strict-Transport-Security;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    client_max_body_size 25m;
+
+    # ---- API, tenant scope ----
+    location /api/ {
+        proxy_pass         http://127.0.0.1:8010;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        # The chat answer is streamed over SSE (D-003). These three lines are
+        # what make it arrive token by token instead of in one lump at the end:
+        # buffering off, no gzip (which buffers to compress), and a read timeout
+        # longer than a slow answer.
+        proxy_buffering    off;
+        proxy_cache        off;
+        gzip               off;
+        proxy_read_timeout 300s;
+    }
+
+    # ---- the portal SPA ----
+    location / {
+        proxy_pass         http://127.0.0.1:3010;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}

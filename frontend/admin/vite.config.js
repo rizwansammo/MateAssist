@@ -7,7 +7,25 @@ const REPO_ROOT = resolve(__dirname, "../..");
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, REPO_ROOT, "");
 
+  // The admin panel is served under a path, not a host (D-147):
+  //
+  //     mateassist.site/platform_admin   the panel
+  //     mateassist.site/                 reserved for the marketing site
+  //
+  // It cannot move to a subdomain: `IsPlatformOwner` refuses any request that
+  // resolves to a tenant, and every subdomain of the base domain does. So the
+  // platform surface has to live on the apex, and the apex root belongs to
+  // marketing.
+  //
+  // `base` rewrites every asset URL at build time. Without it the bundle asks
+  // for /assets/index-*.js, which on the apex is the marketing site's territory
+  // and 404s - a blank page with no error in the console.
+  //
+  // Left at "/" in dev so the Vite server still works at localhost:5174.
+  const base = mode === "production" ? "/platform_admin/" : "/";
+
   return {
+    base,
     plugins: [react()],
     resolve: {
       alias: {
