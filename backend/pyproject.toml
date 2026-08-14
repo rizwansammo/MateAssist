@@ -29,6 +29,12 @@ dependencies = [
     "django-cors-headers>=4.4",
     "pgvector>=0.3",
     "uvicorn[standard]>=0.30",              # D-003: ASGI, required for SSE
+    # Process supervisor for the Uvicorn workers in production. Uvicorn alone
+    # can run workers, but it will not restart one that dies - so a single
+    # crashed worker silently reduces capacity until someone notices. Absent
+    # from the image until deployment, where the container exited immediately
+    # with "gunicorn: executable file not found".
+    "gunicorn>=23.0",
     "cryptography>=43",                     # D-071: AES-256-GCM vault
     "openai>=1.40",                         # D-040: DeepSeek is OpenAI-compatible
     "google-genai>=0.3",                    # D-041: Gemini vision
