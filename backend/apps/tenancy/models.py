@@ -40,6 +40,12 @@ class Tenant(models.Model):
     plan = models.CharField(max_length=20, choices=Plan.choices, default=Plan.GROWTH)
     region = models.CharField(max_length=32, default="eu-central-1")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    # D-128: where escalations go. Per workspace, and read only from here - never
+    # from a request parameter - so one tenant's transcript can never be routed
+    # to another tenant's helpdesk.
+    support_email = models.EmailField(
+        blank=True, help_text="Escalations are emailed here. Falls back to the platform default."
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

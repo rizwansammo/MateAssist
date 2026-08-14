@@ -9,8 +9,8 @@ data in one folder with a deletion owner is a to-do list.
 
 | File | Feeds | Deleted by |
 |---|---|---|
-| `tickets.js` | Dashboard metrics, Recent tickets, My Tickets | **Phase 3** — helpdesk API |
-| `knowledge.js` | Knowledge Base categories and article list | **Phase 5** — ingestion pipeline |
+| ~~`knowledge.js`~~ | ~~Knowledge Base~~ | ✅ **deleted in Phase 5** — the page now reads the live API |
+| `tickets.js` | Dashboard metrics, Recent tickets, My Tickets | **superseded by A-008** — ticketing is replaced by an SMTP handoff, so these views need removing or replacing rather than wiring up |
 | `chat.js` | AI Support seeded conversation | **Phase 6** — RAG chat over SSE |
 
 Phase 1 delivers structure, not data. When a phase lands, its file is deleted

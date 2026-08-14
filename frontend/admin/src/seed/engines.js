@@ -15,28 +15,66 @@ export const ENGINES = [
   {
     id: "TEXT",
     section: "Text & Reasoning Engine",
-    provider: "DeepSeek",
     purpose: "Intent classification, RAG answering, escalation drafting, tool calling.",
     receives: "Text only - text chunks, image descriptions, conversation history.",
     neverReceives: "Images. TextEngine has no parameter capable of carrying one.",
-    models: ["deepseek-chat", "deepseek-reasoner"],
     accent: "border-t-emerald-600",
     tone: "ok",
-    keyPlaceholder: "sk-..."
+    keyPlaceholder: "sk-... / AQ...."
   },
   {
     id: "VISION",
     section: "Vision & OCR Engine",
-    provider: "Gemini",
     purpose: "Image description and OCR during runbook ingestion and chat screenshots.",
     receives: "Images. Returns text, and is called for nothing else.",
     neverReceives: "Chat history, retrieved chunks, or any reasoning workload.",
-    models: ["gemini-2.5-flash"],
     accent: "border-t-cyan-600",
     tone: "info",
-    keyPlaceholder: "AIzaSy..."
+    keyPlaceholder: "AQ.... / sk-..."
   }
 ];
+
+/**
+ * A-010: the engine is a ROLE, the provider is who serves it.
+ *
+ * Swapping a provider never touches the engine contract - a TEXT key still
+ * cannot carry an image, whoever is behind it.
+ *
+ * Most vendors speak the OpenAI protocol, so one adapter covers DeepSeek,
+ * OpenAI, Groq, OpenRouter, Together, Mistral and Ollama.
+ */
+export const PROVIDERS = [
+  {
+    id: "DEEPSEEK",
+    label: "DeepSeek",
+    roles: ["TEXT"],
+    defaultBaseUrl: "https://api.deepseek.com",
+    defaultModel: "deepseek-chat",
+    needsBaseUrl: false
+  },
+  {
+    id: "GEMINI",
+    label: "Google Gemini",
+    roles: ["TEXT", "VISION"],
+    defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    defaultModel: "gemini-flash-latest",
+    defaultVisionModel: "gemini-3.6-flash",
+    needsBaseUrl: false
+  },
+  {
+    id: "OPENAI_COMPATIBLE",
+    label: "OpenAI-compatible endpoint",
+    hint: "OpenAI, Groq, OpenRouter, Together, Mistral, Ollama...",
+    roles: ["TEXT", "VISION"],
+    defaultBaseUrl: "",
+    defaultModel: "",
+    needsBaseUrl: true
+  }
+];
+
+export function providersFor(engineId) {
+  return PROVIDERS.filter((p) => p.roles.includes(engineId));
+}
 
 export const KEY_STATUS_TONE = {
   ACTIVE: "ok",

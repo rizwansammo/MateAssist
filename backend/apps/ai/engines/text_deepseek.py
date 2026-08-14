@@ -142,24 +142,47 @@ class TextEngine:
             raw_id=getattr(response, "id", "") or "",
         )
 
-    def stream(self, messages: list[TextMessage], *, temperature: float = 0.2):
-        """Yield content deltas for SSE (D-003). Phase 6 consumes this."""
+    def stream(
+        self, messages: list[TextMessage], *, temperature: float = 0.2, max_tokens: int = 1500
+    ):
+        """Yield content deltas for SSE (D-003).
+
+        Usage lands on `self.last_usage` once the stream finishes. Without
+        stream_options the provider reports no token counts at all, and the
+        streaming path would silently go unmetered - breaking the "no provider
+        call without a meter reading" invariant (D-110) for the single most
+        frequent call in the product.
+        """
         _assert_text_only(messages)
+        self.last_usage = EngineResult(model=self.model)
+        started = time.perf_counter()
+
         try:
             stream = self._client().chat.completions.create(
                 model=self.model,
                 messages=[m.as_api_dict() for m in messages],
                 temperature=temperature,
+                max_tokens=max_tokens,
                 stream=True,
+                stream_options={"include_usage": True},
             )
             for chunk in stream:
+                usage = getattr(chunk, "usage", None)
+                if usage:
+                    self.last_usage.prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                    self.last_usage.completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+                # The usage-only final chunk carries no choices.
+                if not chunk.choices:
+                    continue
                 delta = chunk.choices[0].delta
                 if delta and delta.content:
                     yield delta.content
         except Exception as exc:  # noqa: BLE001
             if _looks_rate_limited(exc):
                 raise RateLimited(str(exc)) from exc
-            raise EngineError(f"DeepSeek stream failed: {exc}") from exc
+            raise EngineError(f"Text stream failed: {exc}") from exc
+        finally:
+            self.last_usage.latency_ms = int((time.perf_counter() - started) * 1000)
 
 
 def _looks_rate_limited(exc: Exception) -> bool:

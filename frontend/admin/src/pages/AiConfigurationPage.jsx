@@ -100,7 +100,17 @@ function EngineSection({ engine, keys, loading, onAdd, onRotate, onRevoke, onPur
             {keys.map((key) => (
               <tr key={key.id}>
                 <td className="border-b border-slate-100 px-6 py-4">
-                  <div className="text-[13.5px] font-medium text-ink">{key.label}</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[13.5px] font-medium text-ink">{key.label}</span>
+                    <span className="rounded-none border border-hairline bg-slate-50 px-1.5 py-0.5 font-mono text-[10.5px] uppercase tracking-wider text-slate-600">
+                      {key.provider}
+                    </span>
+                  </div>
+                  {/* The RESOLVED model, not the override - an operator needs to
+                      see what will actually be called, not a blank field. */}
+                  <div className="mt-0.5 font-mono text-[11.5px] text-slate-500">
+                    {key.resolved_model}
+                  </div>
                   <div className="mt-0.5 text-[11.5px] text-slate-400">
                     Added {new Date(key.created_at).toLocaleDateString("en-GB")} - quota{" "}
                     {key.daily_quota ?? "unmetered"}
@@ -189,19 +199,15 @@ export default function AiConfigurationPage() {
     refresh();
   }, [refresh]);
 
-  const save = async ({ engineId, keyId, label, secret, quota }) => {
+  const save = async (form) => {
+    const { engineId, keyId, ...rest } = form;
     try {
       if (keyId) {
-        await vaultApi.rotate(keyId, { label, secret });
-        notify("Key rotated", `${label} is live - audit event written`);
+        await vaultApi.rotate(keyId, rest);
+        notify("Key rotated", `${rest.label} is live - audit event written`);
       } else {
-        await vaultApi.create({
-          engine: engineId,
-          label,
-          secret,
-          daily_quota: quota && quota !== "unlimited" ? Number(quota) : null
-        });
-        notify("Key added", `${label} joined the ${engineId} pool`);
+        await vaultApi.create({ engine: engineId, ...rest });
+        notify("Key added", `${rest.label} joined the ${engineId} pool`);
       }
       await refresh();
     } catch (error) {

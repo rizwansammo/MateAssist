@@ -1,0 +1,58 @@
+from rest_framework import serializers
+
+from .models import Conversation, Message
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    """The attachment KEY is not exposed - it is an internal storage path, and a
+    client that needs the image gets a signed URL after an authorisation check."""
+
+    class Meta:
+        model = Message
+        fields = (
+            "id",
+            "role",
+            "text",
+            "citations",
+            "attachment_description",
+            "proposed_escalation",
+            "created_at",
+        )
+        read_only_fields = fields
+
+
+class ConversationSerializer(serializers.ModelSerializer):
+    messages = MessageSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Conversation
+        fields = (
+            "id",
+            "title",
+            "resolved",
+            "escalated_at",
+            "created_at",
+            "updated_at",
+            "messages",
+        )
+        read_only_fields = fields
+
+
+class SendMessageSerializer(serializers.Serializer):
+    text = serializers.CharField(allow_blank=True, trim_whitespace=True)
+    image = serializers.ImageField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        """A screenshot on its own is a valid question - "what is this?" is
+        implied - but an empty turn with nothing attached is not."""
+        if not attrs.get("text") and not attrs.get("image"):
+            raise serializers.ValidationError("Type a message or attach a screenshot.")
+        if not attrs.get("text"):
+            attrs["text"] = "What does this screenshot show, and how do I fix it?"
+        return attrs
+
+
+class FeedbackSerializer(serializers.Serializer):
+    message = serializers.IntegerField()
+    helpful = serializers.BooleanField()
+    note = serializers.CharField(required=False, allow_blank=True)

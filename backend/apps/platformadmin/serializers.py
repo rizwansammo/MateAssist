@@ -8,7 +8,7 @@ fails the build if one ever appears.
 
 from rest_framework import serializers
 
-from apps.ai.models import Engine, ModelPrice, ProviderKey
+from apps.ai.models import PROVIDER_DEFAULTS, Engine, ModelPrice, Provider, ProviderKey
 
 
 class ProviderKeySerializer(serializers.ModelSerializer):
@@ -16,12 +16,21 @@ class ProviderKeySerializer(serializers.ModelSerializer):
 
     masked = serializers.CharField(read_only=True)
     is_available = serializers.SerializerMethodField()
+    # Resolved values, so the operator sees what will ACTUALLY be called rather
+    # than a blank field meaning "the default, whatever that is".
+    resolved_model = serializers.CharField(read_only=True)
+    resolved_base_url = serializers.CharField(read_only=True)
 
     class Meta:
         model = ProviderKey
         fields = (
             "id",
             "engine",
+            "provider",
+            "base_url",
+            "model",
+            "resolved_model",
+            "resolved_base_url",
             "label",
             "masked",
             "last4",
@@ -44,6 +53,9 @@ class ProviderKeyWriteSerializer(serializers.Serializer):
     """Create or rotate. `secret` is write-only and never echoed back."""
 
     engine = serializers.ChoiceField(choices=Engine.choices)
+    provider = serializers.ChoiceField(choices=Provider.choices, default=Provider.OPENAI_COMPATIBLE)
+    base_url = serializers.CharField(required=False, allow_blank=True, default="")
+    model = serializers.CharField(required=False, allow_blank=True, default="", max_length=64)
     label = serializers.CharField(max_length=64)
     secret = serializers.CharField(write_only=True, trim_whitespace=True)
     weight = serializers.IntegerField(default=1, min_value=1, max_value=100)
@@ -54,6 +66,28 @@ class ProviderKeyWriteSerializer(serializers.Serializer):
         if len(value) < 8:
             raise serializers.ValidationError("That does not look like a provider credential.")
         return value
+
+    def validate(self, attrs):
+        """A generic endpoint has no defaults to fall back on.
+
+        Catching it here means the operator sees a form error instead of a key
+        that saves cleanly and then fails on the first real request.
+        """
+        provider = attrs.get("provider")
+        defaults = PROVIDER_DEFAULTS.get(provider, {})
+
+        if not attrs.get("base_url") and not defaults.get("base_url"):
+            raise serializers.ValidationError(
+                {"base_url": "A base URL is required for a generic OpenAI-compatible endpoint."}
+            )
+
+        engine = attrs.get("engine")
+        default_model = defaults.get("vision_model" if engine == Engine.VISION else "text_model")
+        if not attrs.get("model") and not default_model:
+            raise serializers.ValidationError(
+                {"model": f"A model id is required - {provider} has no default for {engine}."}
+            )
+        return attrs
 
 
 class ModelPriceSerializer(serializers.ModelSerializer):

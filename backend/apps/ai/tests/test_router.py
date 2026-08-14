@@ -121,7 +121,7 @@ def test_rate_limit_cools_the_key_and_fails_over(tenant):
     order = iter([True, False])
     result = router._call_with_pool(
         Engine.TEXT,
-        lambda _key: FakeClient(next(order)),
+        lambda _key, _secret: FakeClient(next(order)),
         lambda client: client.complete(),
         tenant=tenant,
         user=None,
@@ -159,7 +159,7 @@ def test_every_successful_call_writes_a_usage_event(tenant):
 
     router._call_with_pool(
         Engine.TEXT,
-        lambda _k: FakeClient(),
+        lambda _k, _secret: FakeClient(),
         lambda c: c.complete(),
         tenant=tenant,
         user=None,

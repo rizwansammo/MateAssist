@@ -14,6 +14,8 @@ urlpatterns = [
     path("api/v1/", include("apps.accounts.urls")),
     path("api/v1/", include("apps.platformadmin.urls")),
     path("api/v1/", include("apps.knowledge.urls")),
+    path("api/v1/", include("apps.chat.urls")),
+    path("api/v1/", include("apps.metering.urls")),
 ]
 
 if settings.DEBUG:

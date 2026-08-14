@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from apps.ai.models import Engine, ProviderKey
+from apps.ai.models import Engine, Provider, ProviderKey
 from apps.tenancy.models import Membership, Role, Tenant
 from apps.tenancy.tests.test_isolation import set_db_tenant
 
@@ -126,13 +126,18 @@ def test_platform_owner_can_create_a_key_and_gets_no_plaintext_back(world):
 
     response = APIClient().post(
         KEYS_URL,
-        {"engine": Engine.TEXT, "label": "perm-test", "secret": secret},
+        {
+            "engine": Engine.TEXT,
+            "provider": Provider.DEEPSEEK,
+            "label": "perm-test",
+            "secret": secret,
+        },
         format="json",
         HTTP_HOST=ADMIN_HOST,
         HTTP_AUTHORIZATION=f"Bearer {access}",
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.json()
     body = response.json()
     assert secret not in str(body), "the vault echoed the plaintext back"
     assert "ciphertext" not in body
@@ -141,6 +146,53 @@ def test_platform_owner_can_create_a_key_and_gets_no_plaintext_back(world):
     stored = ProviderKey.objects.get(label="perm-test")
     assert secret not in stored.ciphertext
     assert stored.reveal() == secret
+
+
+def test_generic_endpoint_without_a_base_url_is_rejected(world):
+    """A-010: a generic OpenAI-compatible provider has no defaults to fall back
+    on. Rejecting at save time means the operator sees a form error rather than
+    a key that stores cleanly and fails on the first real request."""
+    access = token("owner@platform.test", ADMIN_HOST)
+
+    response = APIClient().post(
+        KEYS_URL,
+        {
+            "engine": Engine.TEXT,
+            "provider": Provider.OPENAI_COMPATIBLE,
+            "label": "no-base-url",
+            "secret": "sk-something-plausible-1234",
+        },
+        format="json",
+        HTTP_HOST=ADMIN_HOST,
+        HTTP_AUTHORIZATION=f"Bearer {access}",
+    )
+
+    assert response.status_code == 400
+    assert "base_url" in response.json()
+    assert not ProviderKey.objects.filter(label="no-base-url").exists()
+
+
+def test_a_provider_default_fills_in_when_no_override_is_given(world):
+    """Picking a known provider should require nothing but a key."""
+    access = token("owner@platform.test", ADMIN_HOST)
+
+    response = APIClient().post(
+        KEYS_URL,
+        {
+            "engine": Engine.VISION,
+            "provider": Provider.GEMINI,
+            "label": "gemini-defaults",
+            "secret": "AQ.some-plausible-google-key",
+        },
+        format="json",
+        HTTP_HOST=ADMIN_HOST,
+        HTTP_AUTHORIZATION=f"Bearer {access}",
+    )
+
+    assert response.status_code == 201, response.json()
+    body = response.json()
+    assert body["resolved_model"], "no model resolved from the provider default"
+    assert body["model"] == "", "the override should stay blank"
 
 
 def test_mutating_endpoints_are_also_guarded(world):

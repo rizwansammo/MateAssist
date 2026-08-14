@@ -15,7 +15,8 @@ from django.utils import timezone
 
 from apps.audit.models import Level, record
 
-from .engines import EngineError, NoKeyAvailable, RateLimited, TextEngine, VisionEngine
+from .engines import EngineError, NoKeyAvailable, RateLimited
+from .engines.factory import build_text_engine, build_vision_engine
 from .models import Engine, ProviderKey
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,21 @@ def _meter(*, tenant, user, engine, model, operation, result, succeeded=True):
 
 
 def _call_with_pool(engine_name, build_client, invoke, *, tenant, user, operation, max_attempts=3):
-    """Acquire, call, and on a 429 cool the key down and try the next one."""
+    """Acquire, call, and on a 429 cool the key down and try the next one.
+
+    build_client receives the ProviderKey and its plaintext, so the client is
+    chosen from the key's own provider/base_url/model (A-010) rather than being
+    fixed per engine. Failing over between keys can therefore also fail over
+    between vendors.
+    """
+    # D-113: checked here rather than in a view, because a view is not the only
+    # thing that spends money. A Celery task or a management command that called
+    # a view-level check would walk straight past it; nothing reaches an engine
+    # without passing through this function.
+    from apps.metering.budgets import assert_within_budget
+
+    assert_within_budget(tenant)
+
     last_error: Exception | None = None
 
     for attempt in range(max_attempts):
@@ -149,7 +164,7 @@ def _call_with_pool(engine_name, build_client, invoke, *, tenant, user, operatio
                 ) from last_error
             raise
 
-        client = build_client(key.reveal())
+        client = build_client(key, key.reveal())
         try:
             result = invoke(client)
         except RateLimited as exc:
@@ -190,10 +205,10 @@ def _empty_result():
 
 
 def call_text(messages, *, tenant=None, user=None, tools=None, operation="chat", **kwargs):
-    """The only way to reach DeepSeek."""
+    """The only way to reach a text engine, whichever vendor serves the role."""
     return _call_with_pool(
         Engine.TEXT,
-        lambda api_key: TextEngine(api_key),
+        build_text_engine,
         lambda client: client.complete(messages, tools=tools, **kwargs),
         tenant=tenant,
         user=user,
@@ -202,10 +217,10 @@ def call_text(messages, *, tenant=None, user=None, tools=None, operation="chat",
 
 
 def call_vision(image_bytes, *, mime_type, purpose="runbook", tenant=None, user=None):
-    """The only way to reach Gemini - and the only place image bytes exist."""
+    """The only way to reach a vision engine - and the only place image bytes exist."""
     return _call_with_pool(
         Engine.VISION,
-        lambda api_key: VisionEngine(api_key),
+        build_vision_engine,
         lambda client: client.describe(image_bytes, mime_type=mime_type, purpose=purpose),
         tenant=tenant,
         user=user,

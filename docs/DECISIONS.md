@@ -559,3 +559,137 @@ real image call that correctly described a generated test image. `gemini-3.5-fla
 
 **Standing rule:** re-run `manage.py verify_providers` whenever a model pin changes, and treat a
 green result as perishable. This one was stale within months.
+
+---
+
+### A-010 — Engines are roles; providers are configuration
+**Date:** 2026-08-09 · **Amends:** D-040, D-044, D-045 · **Migration cost:** one additive migration
+
+The two engines were vendor-locked: `TEXT` meant DeepSeek, `VISION` meant Gemini. That was
+never necessary, and A-009 showed the risk — a vendor deprecated a model out from under us
+mid-build.
+
+**The split is now explicit:**
+
+```
+ProviderKey.engine    TEXT | VISION                       the ROLE - architecture
+ProviderKey.provider  DEEPSEEK | GEMINI | OPENAI_COMPATIBLE   who serves it - configuration
+ProviderKey.base_url  overrides the provider default
+ProviderKey.model     overrides the provider default
+```
+
+`OPENAI_COMPATIBLE` is deliberately broad. DeepSeek, OpenAI, Groq, OpenRouter, Together,
+Mistral, Ollama **and Gemini's compatibility endpoint** all speak the same protocol, so one
+adapter with a configurable `base_url` covers most of the market without new code.
+`apps/ai/engines/factory.py` is the only place that maps a provider to a client.
+
+**This does not weaken the engine contract.** D-042 constrains *roles*, not vendors: a text
+engine never receives an image, whoever serves it. `_assert_text_only` still guards every text
+adapter, and the vision adapters remain the only modules where image bytes exist. Vendors
+became swappable; the isolation did not move.
+
+**Verified live — both roles on one free Gemini key:**
+
+```
+Text & Reasoning   gemini-flash-latest  via the OpenAI-compatible endpoint  -> 'ok'
+Vision & OCR       gemini-3.6-flash     via the native SDK                  -> real description
+```
+
+Tool calling and streaming both work over the compatibility endpoint, so Phase 6 is unblocked
+without a DeepSeek purchase. DeepSeek remains the intended production text provider — it is now
+a dropdown choice rather than a hard dependency.
+
+**Two operational findings:**
+
+1. **`max_tokens` must be generous.** With a small cap, Gemini 3.x spends the budget on internal
+   reasoning and returns `content=None` with `finish_reason=length` — a silently empty answer,
+   not an error. Measured: `max_tokens=10` → empty; `max_tokens=200` → `'ready'`. The vision
+   adapter uses 1024 and `verify_providers` fails loudly on empty content rather than reporting
+   a pass.
+2. **The Gemini free tier allows 5 requests per minute per model.** Tight enough that the key
+   pool's cooldown and failover are load-bearing, not decorative — and it needs more than one
+   key to fail over to.
+
+---
+
+## A-011 — Self-serve sign-up is deferred until after the product is functional
+
+**Status: accepted, 2026-08-14.**
+
+There is no registration endpoint. `apps/accounts/urls.py` exposes only `login`, `refresh`,
+`logout` and `me`; users and workspaces are created by an operator or by `seed_dev`. This was
+never in the original brief and Phase 7 does not add it.
+
+**The sequencing is deliberate.** Sign-up is the entrance to a commercial funnel — landing page,
+plan comparison, trial or purchase, then workspace provisioning. Every one of those depends on
+what the product actually does and what a plan is allowed to consume. Building the funnel before
+the metering rollups exist would mean specifying limits that nothing enforces, and rebuilding it
+once they do.
+
+**It is not blocked on schema.** `Tenant` already carries plan fields, RLS already isolates a new
+workspace the moment its row exists, and `seed_dev` already provisions one programmatically. What
+is missing is a public page, a payment integration, and an email-verification step — additive work
+on top of a tenancy model that was designed for it.
+
+**Order:** Phase 7 (metering rollups, budgets, System Logs) closes the last dummy-data surfaces.
+Deployment follows. The marketing site, subscription plans, trial and purchase flow, and self-serve
+sign-up come after that, as a separate track.
+
+---
+
+## A-012 — Phase 7A reporting diverges from D-112 and D-114
+
+**Status: accepted, 2026-08-14.** Amends D-112, D-114. Refines D-113.
+
+Three deliberate departures, recorded so the manifest is not quietly wrong.
+
+### D-112 — live aggregation instead of a nightly `UsageDaily` table
+
+D-112 specified `celery beat` rolling raw events into `UsageDaily` overnight, with
+dashboards reading only the rollup. **Built instead:** aggregation queries
+straight over `UsageEvent`, computed per request.
+
+The nightly table buys one thing — a bounded scan when the event count is large —
+and costs three: dashboards up to 24 hours stale, a Celery dependency on the
+reporting path, and a backfill problem every time the rollup schema changes or a
+run is missed. At current volume the aggregate is a single indexed scan on
+`(tenant, -created_at)` and returns immediately.
+
+The trade reverses with scale. **Trigger to revisit:** when a platform-scope
+summary over one billing month exceeds ~500 ms, or `UsageEvent` passes roughly
+10M rows. The rollup table then goes *behind* `rollups.py`, whose function
+signatures are already the seam — no caller changes.
+
+Two things D-112 got right and are kept: month-to-date spend used for budget
+enforcement is never cached or pre-aggregated (a stale cap is unbounded
+overspend), and dashboards never assemble figures in the frontend.
+
+### D-114 — the audit log has no retention policy yet
+
+D-114 specified 90-day retention. **Built:** an unbounded append-only log with a
+query API and no pruning. Deleting audit rows is irreversible, and a pruning job
+that runs before anyone has watched the log fill is a job written against
+guesses. The retention job is Phase 8 work; until then the log grows, which is
+the safe direction to be wrong in.
+
+### D-113 — cap is per workspace, not per plan
+
+D-113 framed the cap as a plan allowance with a hard stop at 100%.
+**Built:** `TenantBudget`, a per-workspace figure with its own `enforce` flag and
+`alert_at_percent` (default 80, matching D-113's soft warning).
+
+Per-workspace because plans are a commercial construct that will change when the
+subscription flow is built (A-011), and a cap tied to a plan tier would have to
+be rebuilt then. A plan can set the *default* figure later without changing the
+enforcement path. `enforce` defaults to False so that adding a budget is an
+observation rather than an outage, and a zero cap means "no limit" rather than
+"spend nothing".
+
+### One consequence worth stating plainly
+
+`cost_usd` is computed and **stored** when a usage row is written, so prices are
+not retroactive: entering a rate tomorrow does not reprice yesterday's traffic.
+That is correct — a rate change must never rewrite an invoice already issued —
+but it means traffic recorded before a `ModelPrice` exists reads `$0.00`
+permanently. `seed_dev` now seeds rates, and `Summary.unpriced_models` names
+anything still missing on every total. There is no backfill command.

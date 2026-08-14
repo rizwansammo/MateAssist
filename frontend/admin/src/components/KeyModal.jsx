@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Check, Eye, Lock, X } from "lucide-react";
+
+import { providersFor } from "../seed/engines.js";
 
 /**
  * Add / rotate a provider credential.
@@ -8,23 +10,33 @@ import { AlertTriangle, Check, Eye, Lock, X } from "lucide-react";
  * autoComplete off and spellCheck off.
  *
  * D-072: the plaintext never leaves this component. On save only the last four
- * characters are handed upward for display; Phase 4 posts the secret straight
- * to the vault endpoint, which has no read path at all.
+ * characters are handed upward for display; the API has no read path at all.
+ *
+ * A-010: the engine (role) is fixed by the section you opened; the provider is
+ * chosen here. Changing the provider cannot change the engine contract - a TEXT
+ * key still cannot carry an image, whoever serves it.
  */
 export function KeyModal({ engine, existingKey, onClose, onSave }) {
   const isRotate = Boolean(existingKey);
+  const providers = useMemo(() => providersFor(engine.id), [engine.id]);
 
+  const [providerId, setProviderId] = useState(existingKey?.provider ?? providers[0]?.id);
   const [label, setLabel] = useState(existingKey?.label ?? "");
   const [secret, setSecret] = useState("");
-  const [quota, setQuota] = useState(existingKey?.quota ?? "unlimited");
+  const [baseUrl, setBaseUrl] = useState(existingKey?.base_url ?? "");
+  const [model, setModel] = useState(existingKey?.model ?? "");
+  const [quota, setQuota] = useState(existingKey?.daily_quota ?? "");
   const [showSecret, setShowSecret] = useState(false);
   const [error, setError] = useState("");
 
-  // Escape closes. A modal that traps you is a bug, not a safeguard.
+  const provider = providers.find((p) => p.id === providerId) ?? providers[0];
+  const placeholderModel =
+    engine.id === "VISION"
+      ? provider?.defaultVisionModel || provider?.defaultModel
+      : provider?.defaultModel;
+
   useEffect(() => {
-    const onKeyDown = (event) => {
-      if (event.key === "Escape") onClose();
-    };
+    const onKeyDown = (event) => event.key === "Escape" && onClose();
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
@@ -40,12 +52,19 @@ export function KeyModal({ engine, existingKey, onClose, onSave }) {
       setError("A label is required so this key can be identified in the audit log.");
       return;
     }
+    if (provider?.needsBaseUrl && !baseUrl.trim()) {
+      setError("A generic OpenAI-compatible endpoint needs a base URL.");
+      return;
+    }
     onSave({
       engineId: engine.id,
       keyId: existingKey?.id,
+      provider: providerId,
       label: label.trim(),
       secret: trimmed,
-      quota: quota.trim() || "unlimited"
+      base_url: baseUrl.trim(),
+      model: model.trim(),
+      daily_quota: quota ? Number(quota) : null
     });
     setSecret("");
     onClose();
@@ -55,12 +74,12 @@ export function KeyModal({ engine, existingKey, onClose, onSave }) {
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={isRotate ? `Rotate key ${existingKey.label}` : `Add ${engine.provider} key`}
+      aria-label={isRotate ? `Rotate key ${existingKey.label}` : `Add a ${engine.section} key`}
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-[#07101C]/75 p-6"
     >
       <form
         onSubmit={submit}
-        className="m-auto flex max-h-[calc(100vh-48px)] w-full max-w-[520px] flex-col rounded-none border border-ink bg-white"
+        className="m-auto flex max-h-[calc(100vh-48px)] w-full max-w-[560px] flex-col rounded-none border border-ink bg-white"
       >
         <div className="flex flex-none items-start gap-4 bg-ink px-6 py-5">
           <div className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-none bg-emerald-500">
@@ -68,7 +87,7 @@ export function KeyModal({ engine, existingKey, onClose, onSave }) {
           </div>
           <div className="min-w-0">
             <div className="text-base font-semibold text-white">
-              {isRotate ? `Rotate key - ${existingKey.label}` : `Add ${engine.provider} key`}
+              {isRotate ? `Rotate key - ${existingKey.label}` : `Add key - ${engine.section}`}
             </div>
             <div className="mt-1 text-[12.5px] text-slate-400">
               {isRotate
@@ -87,14 +106,25 @@ export function KeyModal({ engine, existingKey, onClose, onSave }) {
         </div>
 
         <div className="flex min-h-0 flex-col gap-4 overflow-y-auto p-6">
-          <div className="rounded-none border border-hairline bg-slate-50 px-4 py-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
-              {engine.section}
-            </div>
-            <div className="mt-1 font-mono text-[12.5px] text-ink">
-              {engine.provider} - {engine.models.join(", ")}
-            </div>
-          </div>
+          <label className="flex flex-col gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
+              Provider
+            </span>
+            <select
+              value={providerId}
+              onChange={(e) => setProviderId(e.target.value)}
+              className="rounded-none border border-slate-300 bg-white px-3.5 py-3 text-sm text-ink"
+            >
+              {providers.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            {provider?.hint && (
+              <span className="text-[11.5px] text-slate-400">{provider.hint}</span>
+            )}
+          </label>
 
           <label className="flex flex-col gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
@@ -104,7 +134,7 @@ export function KeyModal({ engine, existingKey, onClose, onSave }) {
               type="text"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              placeholder={`${engine.id === "text" ? "deepseek" : "gemini"}-pool-01`}
+              placeholder={`${providerId.toLowerCase()}-${engine.id.toLowerCase()}-01`}
               className="rounded-none border border-slate-300 bg-white px-3.5 py-3 text-sm text-ink"
             />
           </label>
@@ -138,17 +168,53 @@ export function KeyModal({ engine, existingKey, onClose, onSave }) {
             </span>
           </label>
 
-          <label className="flex flex-col gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
-              Daily quota
-            </span>
-            <input
-              type="text"
-              value={quota}
-              onChange={(e) => setQuota(e.target.value)}
-              className="rounded-none border border-slate-300 bg-white px-3.5 py-3 text-sm text-ink"
-            />
-          </label>
+          <div className="grid gap-3.5 sm:grid-cols-2">
+            <label className="flex flex-col gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
+                Model
+              </span>
+              <input
+                type="text"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={placeholderModel || "required"}
+                className="rounded-none border border-slate-300 bg-white px-3.5 py-3 font-mono text-[13px] text-ink"
+              />
+              <span className="text-[11.5px] text-slate-400">
+                Blank uses the provider default.
+              </span>
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
+                Daily quota
+              </span>
+              <input
+                type="number"
+                min="1"
+                value={quota}
+                onChange={(e) => setQuota(e.target.value)}
+                placeholder="unmetered"
+                className="rounded-none border border-slate-300 bg-white px-3.5 py-3 text-sm text-ink"
+              />
+            </label>
+          </div>
+
+          {/* Only meaningful for a generic endpoint; hidden noise otherwise. */}
+          {provider?.needsBaseUrl && (
+            <label className="flex flex-col gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
+                Base URL
+              </span>
+              <input
+                type="url"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="https://api.groq.com/openai/v1"
+                className="rounded-none border border-slate-300 bg-white px-3.5 py-3 font-mono text-[13px] text-ink"
+              />
+            </label>
+          )}
 
           {error && (
             <div

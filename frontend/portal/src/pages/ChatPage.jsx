@@ -1,165 +1,107 @@
-import { useState } from "react";
-import { BookOpen, Bot, Check, Send, Terminal, Ticket } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertTriangle, BookOpen, Bot, Check, Mail } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+import { ChatComposer } from "../components/ChatComposer.jsx";
 import { usePortal } from "../context/PortalContext.jsx";
-import { SEED_CITATIONS, SEED_MESSAGES } from "../seed/chat.js";
+import { chatApi } from "../lib/chat.js";
 
-function Message({ message, onCreateTicket, onOpenTicket, onBrowseDocs }) {
-  const isAi = message.role === "ai";
-
-  return (
-    <div className={`flex gap-3 ${isAi ? "justify-start" : "justify-end"}`}>
-      {isAi && (
-        <div className="flex h-[30px] w-[30px] flex-none items-center justify-center rounded-none bg-ink">
-          <Bot size={16} strokeWidth={1.8} className="text-emerald-400" />
-        </div>
-      )}
-      <div
-        className={`max-w-[680px] rounded-none border p-4 ${
-          isAi ? "border-hairline bg-white" : "border-ink bg-ink"
-        }`}
-      >
-        <div className="mb-2 flex items-center gap-2.5">
-          <span
-            className={`text-[11px] font-semibold uppercase tracking-[0.1em] ${
-              isAi ? "text-emerald-700" : "text-emerald-400"
-            }`}
-          >
-            {isAi ? "MateAssist" : "Rizwan Ahmed"}
-          </span>
-          <span className={`font-mono text-[11px] ${isAi ? "text-slate-400" : "text-slate-500"}`}>
-            {message.time}
-          </span>
-        </div>
-        <p
-          className={`text-[14.5px] leading-relaxed text-pretty ${
-            isAi ? "text-slate-800" : "text-slate-100"
-          }`}
-        >
-          {message.text}
-        </p>
-
-        {message.steps && (
-          <ol className="mt-3.5 flex list-none flex-col gap-2.5 p-0">
-            {message.steps.map((step, index) => (
-              <li key={step} className="flex gap-3 text-sm leading-relaxed text-slate-800">
-                <span className="flex h-5 w-5 flex-none items-center justify-center rounded-none bg-ink font-mono text-[11px] font-semibold text-emerald-400">
-                  {index + 1}
-                </span>
-                <span>{step}</span>
-              </li>
-            ))}
-          </ol>
-        )}
-
-        {message.code && (
-          <div className="mt-4 rounded-none border border-ink bg-ink">
-            <div className="flex items-center gap-2 border-b border-slate-800 px-3 py-2">
-              <Terminal size={14} className="text-emerald-400" />
-              <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
-                {message.codeLabel}
-              </span>
-            </div>
-            <pre className="overflow-x-auto px-4 py-3.5 font-mono text-[12.5px] leading-relaxed text-slate-200">
-              {message.code}
-            </pre>
-          </div>
-        )}
-
-        {message.source && (
-          <div className="mt-3.5 flex items-center gap-2.5 border-t border-hairline pt-3">
-            <BookOpen size={14} strokeWidth={1.8} className="text-slate-500" />
-            <span className="text-[12.5px] text-slate-500">Source:</span>
-            {/* Phase 6 makes this a real link to the cited Knowledge Base document. */}
-            <button
-              type="button"
-              onClick={onBrowseDocs}
-              className="rounded-none text-[12.5px] font-medium text-emerald-700"
-            >
-              {message.source}
-            </button>
-          </div>
-        )}
-
-        {/*
-          D-122: DeepSeek's create_ticket tool call renders this button - it never
-          executes on its own. The user's click is what creates the ticket.
-          Human-in-the-loop on the only mutating tool.
-        */}
-        {message.hasAction && (
-          <div className="mt-4 flex flex-wrap items-center gap-2.5">
-            <button
-              type="button"
-              onClick={onCreateTicket}
-              className="flex items-center gap-2 rounded-none bg-emerald-600 px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-emerald-700"
-            >
-              <Ticket size={15} />
-              Create Ticket
-            </button>
-            <button
-              type="button"
-              onClick={onBrowseDocs}
-              className="rounded-none border border-slate-300 bg-white px-4 py-2.5 text-[13px] font-medium text-slate-700 transition hover:bg-slate-50"
-            >
-              Search docs instead
-            </button>
-          </div>
-        )}
-
-        {message.ticketRef && (
-          <div className="mt-3.5 flex flex-wrap items-center gap-3 rounded-none border border-emerald-200 bg-emerald-50 px-4 py-3">
-            <Check size={17} strokeWidth={2.5} className="text-emerald-700" />
-            <div>
-              <div className="text-[13.5px] font-semibold text-emerald-800">
-                Ticket {message.ticketRef} - Assigned to Daniel Koch
-              </div>
-              <div className="mt-0.5 text-[12.5px] text-emerald-700">
-                Priority: High - Identity &amp; Access queue - SLA 4h
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={onOpenTicket}
-              className="ml-auto whitespace-nowrap rounded-none border border-emerald-600 bg-white px-3.5 py-2 text-[12.5px] font-semibold text-emerald-700 transition hover:bg-emerald-100"
-            >
-              Open ticket
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
+/**
+ * AI Support - live (Phase 6).
+ *
+ * D-080 still holds: there is no Device/OS/Location/Entra panel. The right-hand
+ * column survives with the two things that became real - citations from actual
+ * retrieval, and feedback that is persisted.
+ *
+ * A-008: the action button escalates by email rather than creating a ticket.
+ * The model proposes; this button is the user's confirmation (D-126).
+ */
 export default function ChatPage() {
   const navigate = useNavigate();
-  const { createTicket } = usePortal();
-  const [messages, setMessages] = useState(SEED_MESSAGES);
-  const [draft, setDraft] = useState("");
+  const { notify } = usePortal();
 
-  const onCreateTicket = () => {
-    const ticket = createTicket();
-    setMessages((prev) =>
-      prev
-        .map((m) => (m.hasAction ? { ...m, hasAction: false } : m))
-        .concat([
-          {
-            role: "ai",
-            time: "09:12",
-            text:
-              "Done. I've raised a ticket with your device details, this conversation and the runbooks I checked attached.",
-            ticketRef: ticket.id
-          }
-        ])
-    );
+  const [conversationId, setConversationId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [streaming, setStreaming] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [citations, setCitations] = useState([]);
+  const bottomRef = useRef(null);
+
+  const ensureConversation = useCallback(async () => {
+    if (conversationId) return conversationId;
+    const created = await chatApi.createConversation();
+    setConversationId(created.id);
+    return created.id;
+  }, [conversationId]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streaming]);
+
+  const send = async ({ text, image }) => {
+    setBusy(true);
+    setStreaming("");
+    const optimistic = { id: `local-${Date.now()}`, role: "user", text, pending: Boolean(image) };
+    setMessages((prev) => [...prev, optimistic]);
+
+    try {
+      const id = await ensureConversation();
+      let collected = "";
+
+      await chatApi.stream(id, { text, image }, (event, data) => {
+        if (event === "start") {
+          setCitations(data.citations ?? []);
+        } else if (event === "delta") {
+          collected += data.text;
+          setStreaming(collected);
+        } else if (event === "error") {
+          notify("The assistant could not answer", data.detail, "warn");
+        }
+      });
+
+      // Reload from the server rather than trusting the accumulated text: the
+      // persisted message carries citations, the escalation proposal and the
+      // real ids that feedback and escalation need.
+      const conversation = await chatApi.getConversation(id);
+      setMessages(conversation.messages ?? []);
+      setStreaming("");
+    } catch (error) {
+      notify("Message failed", error.message, "warn");
+      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const send = () => {
-    if (!draft.trim()) return;
-    // Phase 6: POST the turn and stream the reply over SSE.
-    setMessages((prev) => prev.concat([{ role: "user", time: "09:14", text: draft.trim() }]));
-    setDraft("");
+  const escalate = async (proposal) => {
+    try {
+      const result = await chatApi.escalate(conversationId, proposal);
+      if (result.sent) {
+        notify("Sent to your IT team", `Emailed to ${result.recipient}`);
+        const conversation = await chatApi.getConversation(conversationId);
+        setMessages(conversation.messages ?? []);
+      } else {
+        notify("Could not send", result.detail, "warn");
+      }
+    } catch (error) {
+      notify("Could not send", error.message, "warn");
+    }
+  };
+
+  const rate = async (messageId, helpful) => {
+    try {
+      await chatApi.feedback(conversationId, messageId, helpful);
+      notify("Thanks", helpful ? "Glad that helped." : "Noted - we'll use this to improve.");
+    } catch (error) {
+      notify("Could not record feedback", error.message, "warn");
+    }
+  };
+
+  const newChat = () => {
+    setConversationId(null);
+    setMessages([]);
+    setStreaming("");
+    setCitations([]);
   };
 
   return (
@@ -180,111 +122,208 @@ export default function ChatPage() {
               </span>
             </div>
             <div className="mt-0.5 truncate text-xs text-slate-500">
-              Grounded on your workspace runbooks
+              Answers grounded in your workspace runbooks
             </div>
           </div>
-          <div className="ml-auto flex flex-none gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setMessages(SEED_MESSAGES);
-                setDraft("");
-              }}
-              className="flex-none whitespace-nowrap rounded-none border border-slate-300 bg-white px-3.5 py-2 text-[12.5px] font-medium text-slate-700 transition hover:bg-slate-50"
-            >
-              New chat
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={newChat}
+            className="ml-auto flex-none whitespace-nowrap rounded-none border border-slate-300 bg-white px-3.5 py-2 text-[12.5px] font-medium text-slate-700 transition hover:bg-slate-50"
+          >
+            New chat
+          </button>
         </div>
 
         <div className="flex flex-1 flex-col gap-6 bg-[#FCFDFE] px-6 pb-5 pt-7">
-          {messages.map((message, index) => (
-            <Message
-              // Seeded messages have no ids yet; Phase 6 keys on the persisted
-              // Message primary key.
-              key={`${message.role}-${index}`}
+          {messages.length === 0 && !streaming && (
+            <div className="mx-auto max-w-[520px] py-10 text-center">
+              <div className="text-[15px] font-semibold text-ink">
+                Ask about anything IT
+              </div>
+              <p className="mt-2 text-[13.5px] leading-relaxed text-slate-500">
+                MateAssist answers from your team&apos;s runbooks and cites the document it used.
+                Paste a screenshot of an error and it will read that too.
+              </p>
+            </div>
+          )}
+
+          {messages.map((message) => (
+            <MessageBubble
+              key={message.id}
               message={message}
-              onCreateTicket={onCreateTicket}
-              onOpenTicket={() => navigate("/app/tickets")}
+              onEscalate={escalate}
+              onRate={rate}
               onBrowseDocs={() => navigate("/app/knowledge")}
             />
           ))}
+
+          {streaming && (
+            <div className="flex gap-3">
+              <div className="flex h-[30px] w-[30px] flex-none items-center justify-center rounded-none bg-ink">
+                <Bot size={16} strokeWidth={1.8} className="text-emerald-400" />
+              </div>
+              <div className="max-w-[680px] rounded-none border border-hairline bg-white p-4">
+                <p className="whitespace-pre-wrap text-[14.5px] leading-relaxed text-slate-800">
+                  {streaming}
+                  <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-emerald-500 align-middle" />
+                </p>
+              </div>
+            </div>
+          )}
+
+          {busy && !streaming && (
+            <div className="flex items-center gap-3">
+              <div className="flex h-[30px] w-[30px] flex-none items-center justify-center rounded-none bg-ink">
+                <Bot size={16} strokeWidth={1.8} className="text-emerald-400" />
+              </div>
+              <div className="flex items-center gap-2.5 rounded-none border border-hairline bg-white px-4 py-3 text-[13.5px] text-slate-500">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-none bg-emerald-500" />
+                Searching your runbooks...
+              </div>
+            </div>
+          )}
+
+          <div ref={bottomRef} />
         </div>
 
-        <div className="sticky bottom-0 border-t border-hairline bg-white px-6 pb-5 pt-4">
-          {/*
-            Phase 6 (D-091) replaces this with the real composer: clipboard
-            paste-screenshot, drag-and-drop, file picker and a thumbnail preview
-            with remove-before-send. Attached images go to Gemini for description
-            and NEVER to DeepSeek (D-041/D-042).
-          */}
-          <div className="flex rounded-none border border-slate-300 bg-white">
-            <input
-              type="text"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send()}
-              placeholder="Describe your issue - MateAssist replies with steps from your company runbooks"
-              className="min-w-0 flex-1 rounded-none border-0 bg-transparent px-4 py-3.5 text-sm text-ink"
-            />
-            <button
-              type="button"
-              onClick={send}
-              className="flex flex-none items-center gap-2 rounded-none bg-ink px-5 text-[13px] font-semibold text-white transition hover:bg-emerald-600"
-            >
-              Send
-              <Send size={15} />
-            </button>
-          </div>
-        </div>
+        <ChatComposer onSend={send} busy={busy} />
       </section>
 
-      {/*
-        D-080: the "Conversation context" block (Device / OS / Location / Entra
-        status) is deleted, and no MDM or Entra integration is scoped. The two
-        panels below survive because both become real: citations from RAG
-        retrieval, and feedback persisted as MessageFeedback (Phase 6).
-      */}
       <aside className="hidden flex-col gap-6 bg-white px-5 py-6 xl:flex">
         <div>
           <div className="mb-3 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-            Referenced articles
+            Referenced runbooks
           </div>
-          <div className="flex flex-col gap-px rounded-none border border-hairline bg-hairline">
-            {SEED_CITATIONS.map((title) => (
+          {citations.length === 0 ? (
+            <p className="text-[12.5px] text-slate-400">
+              Sources appear here once you ask a question.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-px rounded-none border border-hairline bg-hairline">
+              {citations.map((citation, index) => (
+                <button
+                  key={`${citation.document_id}-${index}`}
+                  type="button"
+                  onClick={() => navigate("/app/knowledge")}
+                  className="rounded-none bg-white px-3 py-3 text-left transition hover:bg-slate-50"
+                >
+                  <span className="block text-[13px] text-ink">{citation.title}</span>
+                  <span className="mt-0.5 block text-[11.5px] text-slate-400">
+                    {citation.page ? `page ${citation.page}` : "runbook"}
+                    {citation.from_image ? " - from a figure" : ""}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </aside>
+    </main>
+  );
+}
+
+function MessageBubble({ message, onEscalate, onRate, onBrowseDocs }) {
+  const isAi = message.role === "assistant";
+
+  return (
+    <div className={`flex gap-3 ${isAi ? "justify-start" : "justify-end"}`}>
+      {isAi && (
+        <div className="flex h-[30px] w-[30px] flex-none items-center justify-center rounded-none bg-ink">
+          <Bot size={16} strokeWidth={1.8} className="text-emerald-400" />
+        </div>
+      )}
+      <div
+        className={`max-w-[680px] rounded-none border p-4 ${
+          isAi ? "border-hairline bg-white" : "border-ink bg-ink"
+        }`}
+      >
+        <p
+          className={`whitespace-pre-wrap text-[14.5px] leading-relaxed text-pretty ${
+            isAi ? "text-slate-800" : "text-slate-100"
+          }`}
+        >
+          {message.text}
+        </p>
+
+        {message.attachment_description && (
+          <div className="mt-3 rounded-none border border-slate-700 bg-ink2 p-3">
+            <div className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-cyan-400">
+              Screenshot read by the vision engine
+            </div>
+            <p className="mt-1.5 text-[12px] leading-relaxed text-slate-300">
+              {message.attachment_description}
+            </p>
+          </div>
+        )}
+
+        {isAi && message.citations?.length > 0 && (
+          <div className="mt-3.5 flex flex-wrap items-center gap-2 border-t border-hairline pt-3">
+            <BookOpen size={14} strokeWidth={1.8} className="text-slate-500" />
+            <span className="text-[12.5px] text-slate-500">Sources:</span>
+            {message.citations.map((citation, index) => (
               <button
-                key={title}
+                key={`${citation.document_id}-${index}`}
                 type="button"
-                onClick={() => navigate("/app/knowledge")}
-                className="rounded-none bg-white px-3 py-3 text-left text-[13px] text-ink transition hover:bg-slate-50"
+                onClick={onBrowseDocs}
+                className="rounded-none border border-hairline bg-slate-50 px-2 py-0.5 text-[12px] font-medium text-emerald-700"
               >
-                {title}
+                {citation.title}
               </button>
             ))}
           </div>
-        </div>
+        )}
 
-        <div className="rounded-none border border-hairline bg-slate-50 p-3.5">
-          <div className="text-[13px] font-semibold text-ink">Was this helpful?</div>
-          <p className="mb-3 mt-1.5 text-[12.5px] leading-relaxed text-slate-500">
-            Feedback trains MateAssist on your workspace only.
-          </p>
-          <div className="flex gap-2">
+        {/* A-008 / D-126: the model proposed this; the click sends it. */}
+        {message.proposed_escalation && (
+          <div className="mt-4 rounded-none border border-amber-200 bg-amber-50 p-3.5">
+            <div className="flex gap-2.5">
+              <AlertTriangle
+                size={16}
+                strokeWidth={2}
+                className="mt-0.5 flex-none text-amber-700"
+              />
+              <div className="min-w-0">
+                <div className="text-[13px] font-semibold text-amber-900">
+                  This needs a human
+                </div>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-amber-800">
+                  {message.proposed_escalation.summary}
+                </p>
+              </div>
+            </div>
             <button
               type="button"
-              className="flex-1 rounded-none border border-slate-300 bg-white py-2 text-[12.5px] font-medium text-ink transition hover:border-emerald-600 hover:text-emerald-700"
+              onClick={() => onEscalate(message.proposed_escalation)}
+              className="mt-3 flex items-center gap-2 rounded-none bg-emerald-600 px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-emerald-700"
+            >
+              <Mail size={15} />
+              Email my IT team
+            </button>
+          </div>
+        )}
+
+        {isAi && !String(message.id).startsWith("local-") && (
+          <div className="mt-3 flex items-center gap-2 border-t border-hairline pt-3">
+            <span className="text-[12px] text-slate-500">Was this helpful?</span>
+            <button
+              type="button"
+              onClick={() => onRate(message.id, true)}
+              className="rounded-none border border-slate-300 bg-white px-2.5 py-1 text-[12px] font-medium text-ink transition hover:border-emerald-600 hover:text-emerald-700"
             >
               Yes
             </button>
             <button
               type="button"
-              className="flex-1 rounded-none border border-slate-300 bg-white py-2 text-[12.5px] font-medium text-ink transition hover:border-amber-600 hover:text-amber-700"
+              onClick={() => onRate(message.id, false)}
+              className="rounded-none border border-slate-300 bg-white px-2.5 py-1 text-[12px] font-medium text-ink transition hover:border-amber-600 hover:text-amber-700"
             >
               No
             </button>
           </div>
-        </div>
-      </aside>
-    </main>
+        )}
+
+        {message.id === "local-pending" && <Check size={0} />}
+      </div>
+    </div>
   );
 }

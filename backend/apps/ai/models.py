@@ -15,10 +15,53 @@ from . import vault
 
 
 class Engine(models.TextChoices):
-    """The two engines, and only two (D-040/D-041/D-044)."""
+    """The two ROLES, and only two (D-040/D-041/D-044).
 
-    TEXT = "TEXT", "Text & Reasoning (DeepSeek)"
-    VISION = "VISION", "Vision & OCR (Gemini)"
+    A role is not a vendor. The engine contract - text engines never receive
+    images - is a property of these roles and holds no matter which provider
+    sits behind them.
+    """
+
+    TEXT = "TEXT", "Text & Reasoning"
+    VISION = "VISION", "Vision & OCR"
+
+
+class Provider(models.TextChoices):
+    """Who actually serves a role (A-010).
+
+    OPENAI_COMPATIBLE is deliberately broad: DeepSeek, OpenAI, Groq, OpenRouter,
+    Together, Mistral, Ollama and Gemini's compatibility endpoint all speak the
+    same protocol, so one adapter with a configurable base_url covers most of
+    the market without new code.
+    """
+
+    DEEPSEEK = "DEEPSEEK", "DeepSeek"
+    GEMINI = "GEMINI", "Google Gemini (native SDK)"
+    OPENAI_COMPATIBLE = "OPENAI_COMPATIBLE", "OpenAI-compatible endpoint"
+
+
+# Sensible defaults per provider, overridable per key. base_url is only
+# meaningful for the OpenAI-protocol adapters. Keyed by the string value, since
+# that is what the CharField stores.
+PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
+    Provider.DEEPSEEK: {
+        "base_url": "https://api.deepseek.com",
+        "text_model": "deepseek-chat",
+        "vision_model": "",  # DeepSeek serves no vision role here
+    },
+    Provider.GEMINI: {
+        # Gemini's OpenAI compatibility surface, used when it fills the TEXT
+        # role. The VISION role uses the native SDK instead.
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "text_model": "gemini-flash-latest",
+        "vision_model": "gemini-3.6-flash",
+    },
+    Provider.OPENAI_COMPATIBLE: {
+        "base_url": "",  # required from the operator
+        "text_model": "",
+        "vision_model": "",
+    },
+}
 
 
 class ProviderKey(models.Model):
@@ -27,7 +70,21 @@ class ProviderKey(models.Model):
         RATE_LIMITED = "RATE_LIMITED", "Rate-limited"
         REVOKED = "REVOKED", "Revoked"
 
-    engine = models.CharField(max_length=10, choices=Engine.choices, db_index=True)
+    engine = models.CharField(
+        max_length=10, choices=Engine.choices, db_index=True, help_text="The role this key fills."
+    )
+    provider = models.CharField(
+        max_length=20,
+        choices=Provider.choices,
+        default=Provider.OPENAI_COMPATIBLE,
+        help_text="Who serves the role. Swapping this never changes the engine contract.",
+    )
+    base_url = models.URLField(
+        blank=True, help_text="Overrides the provider default. Required for a generic endpoint."
+    )
+    model = models.CharField(
+        max_length=64, blank=True, help_text="Overrides the provider default model."
+    )
     label = models.CharField(max_length=64)
 
     # The sealed credential. There is no serializer field that reads this and no
@@ -85,6 +142,32 @@ class ProviderKey(models.Model):
     @property
     def masked(self) -> str:
         return f"{'•' * 11}{self.last4}"
+
+    # -- resolved configuration -------------------------------------------
+
+    @property
+    def resolved_base_url(self) -> str:
+        if self.base_url:
+            return self.base_url
+        return PROVIDER_DEFAULTS.get(self.provider, {}).get("base_url", "")
+
+    @property
+    def resolved_model(self) -> str:
+        if self.model:
+            return self.model
+        defaults = PROVIDER_DEFAULTS.get(self.provider, {})
+        key = "vision_model" if self.engine == Engine.VISION else "text_model"
+        return defaults.get(key, "")
+
+    @property
+    def uses_native_gemini(self) -> bool:
+        """Gemini fills the VISION role through its own SDK.
+
+        Its OpenAI compatibility surface is used only for the TEXT role - image
+        handling there is a different shape, and the native SDK is the path the
+        Phase 5 pipeline is already proven against.
+        """
+        return self.provider == Provider.GEMINI and self.engine == Engine.VISION
 
     def is_available(self, now=None) -> bool:
         now = now or timezone.now()

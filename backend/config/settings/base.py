@@ -193,6 +193,21 @@ REFRESH_COOKIE_PATH = "/api/v1/auth"
 REFRESH_COOKIE_SAMESITE = "Lax"
 REFRESH_COOKIE_SECURE = not DEBUG
 
+# ---------------------------------------------------------- escalation ------
+
+# A-008: MateAssist stores no tickets. When the agent cannot resolve an issue it
+# emails the transcript to the workspace's existing helpdesk.
+EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = env("EMAIL_HOST", default="")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="mateassist@localhost")
+
+# Used when a tenant has no support_email of its own (D-128).
+DEFAULT_SUPPORT_EMAIL = env("DEFAULT_SUPPORT_EMAIL", default="")
+
 # ------------------------------------------------------------- celery -------
 
 CELERY_BROKER_URL = env("CELERY_BROKER_URL")

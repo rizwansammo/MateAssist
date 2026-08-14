@@ -54,6 +54,47 @@ class UsageEvent(TenantScopedModel):
         return f"{self.engine}/{self.model} {self.operation} ${self.cost_usd}"
 
 
+class TenantBudget(models.Model):
+    """A monthly spend cap for one workspace (D-113).
+
+    Deliberately NOT a TenantScopedModel. This is platform commercial
+    configuration *about* a workspace, in the same category as `Tenant` itself -
+    a workspace must not be able to raise or disable its own cap by writing to
+    its own row. It is created and edited only through the platform-owner API.
+
+    `enforce` defaults to False so that adding a budget is first an observation,
+    not an outage. An admin sets a figure, watches the dashboard for a cycle, and
+    turns enforcement on once the number looks right.
+    """
+
+    tenant = models.OneToOneField("tenancy.Tenant", on_delete=models.CASCADE, related_name="budget")
+    monthly_usd = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0"))
+    enforce = models.BooleanField(
+        default=False, help_text="Refuse provider calls once the cap is reached."
+    )
+    alert_at_percent = models.PositiveSmallIntegerField(
+        default=80, help_text="Warn on the dashboard at this percentage of the cap."
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("tenant__name",)
+
+    def __str__(self) -> str:
+        state = "enforced" if self.enforce else "advisory"
+        return f"{self.tenant_id}: ${self.monthly_usd}/mo ({state})"
+
+    @property
+    def is_capped(self) -> bool:
+        """A zero or negative cap means "no limit", not "spend nothing".
+
+        The alternative reading would turn the moment an admin creates a budget
+        row into a total outage for that workspace before they have typed a
+        figure - a footgun disguised as strictness.
+        """
+        return self.monthly_usd > 0
+
+
 def price_for(engine: str, model: str) -> ModelPrice | None:
     """Most recent price point for a model, or None if unpriced."""
     return ModelPrice.objects.filter(engine=engine, model=model).order_by("-effective_from").first()

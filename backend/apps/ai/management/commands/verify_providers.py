@@ -81,18 +81,26 @@ class Command(BaseCommand):
 
     # -- helpers ---------------------------------------------------------
 
-    def _key_for(self, engine: str, env_var: str) -> str | None:
-        """Vault first, env fallback. The env path exists only for this command."""
+    def _key_for(self, engine: str, env_var: str):
+        """Vault first, env fallback. Returns (ProviderKey|None, plaintext|None).
+
+        The key row carries the provider, base_url and model (A-010), so the
+        probe below tests the endpoint that would actually be called rather than
+        a hardcoded assumption about the vendor.
+        """
         row = ProviderKey.objects.filter(engine=engine, status=ProviderKey.Status.ACTIVE).first()
         if row:
-            self.stdout.write(f"    using vault key '{row.label}' ({row.masked})")
-            return row.reveal()
+            self.stdout.write(
+                f"    using vault key '{row.label}' ({row.masked}) "
+                f"provider={row.provider} model={row.resolved_model}"
+            )
+            return row, row.reveal()
 
         raw = os.environ.get(env_var) or getattr(settings, env_var, "")
         if raw:
             self.stdout.write(f"    using {env_var} from the environment (dev only)")
-            return raw.strip()
-        return None
+            return None, raw.strip()
+        return None, None
 
     def _ok(self, message):
         self.stdout.write(self.style.SUCCESS(f"    PASS  {message}"))
@@ -106,44 +114,52 @@ class Command(BaseCommand):
     # -- text ------------------------------------------------------------
 
     def _verify_text(self) -> int:
-        self.stdout.write(self.style.MIGRATE_HEADING("\n  Text & Reasoning Engine - DeepSeek"))
-        api_key = self._key_for(Engine.TEXT, "DEEPSEEK_API_KEY_BOOTSTRAP")
+        self.stdout.write(self.style.MIGRATE_HEADING("\n  Text & Reasoning Engine"))
+        key_row, api_key = self._key_for(Engine.TEXT, "DEEPSEEK_API_KEY_BOOTSTRAP")
         if not api_key:
             self._note("no key configured - skipped (open item O-3)")
             return 0
 
-        pinned = [settings.DEEPSEEK_MODEL_CHAT, settings.DEEPSEEK_MODEL_REASONER]
+        base_url = key_row.resolved_base_url if key_row else settings.DEEPSEEK_API_BASE
+        model = key_row.resolved_model if key_row else settings.DEEPSEEK_MODEL_CHAT
         failures = 0
 
         try:
             from openai import OpenAI
 
-            client = OpenAI(api_key=api_key, base_url=settings.DEEPSEEK_API_BASE, timeout=30.0)
-            available = sorted(m.id for m in client.models.list().data)
+            client = OpenAI(api_key=api_key, base_url=base_url, timeout=30.0)
+            available = sorted(m.id.replace("models/", "") for m in client.models.list().data)
         except Exception as exc:  # noqa: BLE001
-            self._fail(f"could not list models: {exc}")
+            self._fail(f"could not list models at {base_url}: {exc}")
             return 1
 
-        self._note(f"provider offers: {', '.join(available) or '(none reported)'}")
-        for model in pinned:
-            if model in available:
-                self._ok(f"pinned model '{model}' resolves")
-            else:
-                self._fail(f"pinned model '{model}' NOT offered - amend DECISIONS.md section 5")
-                failures += 1
+        self._note(f"{len(available)} models at {base_url}")
+        if model in available:
+            self._ok(f"model '{model}' resolves")
+        else:
+            self._fail(f"model '{model}' NOT offered - check the key's model override")
+            self._note(f"available: {', '.join(available[:8])}")
+            failures += 1
 
         try:
             from apps.ai.engines import TextEngine, TextMessage
 
-            result = TextEngine(api_key).complete(
+            result = TextEngine(api_key, model=model, base_url=base_url).complete(
                 [TextMessage(role="user", content="Reply with the single word: ok")],
-                max_tokens=5,
+                # Deliberately generous. A reasoning model with a tight cap
+                # spends the budget thinking and returns empty content with
+                # finish_reason=length - a silent failure, not an error (A-010).
+                max_tokens=256,
             )
-            self._ok(
-                f"live call returned {result.text.strip()!r} "
-                f"({result.prompt_tokens}+{result.completion_tokens} tokens, "
-                f"{result.latency_ms}ms)"
-            )
+            if not result.text.strip():
+                self._fail("live call returned empty content - try a larger max_tokens")
+                failures += 1
+            else:
+                self._ok(
+                    f"live call returned {result.text.strip()[:40]!r} "
+                    f"({result.prompt_tokens}+{result.completion_tokens} tokens, "
+                    f"{result.latency_ms}ms)"
+                )
         except Exception as exc:  # noqa: BLE001
             self._fail(f"live call failed: {exc}")
             failures += 1
@@ -153,13 +169,13 @@ class Command(BaseCommand):
     # -- vision ----------------------------------------------------------
 
     def _verify_vision(self) -> int:
-        self.stdout.write(self.style.MIGRATE_HEADING("\n  Vision & OCR Engine - Gemini"))
-        api_key = self._key_for(Engine.VISION, "GEMINI_API_KEY_BOOTSTRAP")
+        self.stdout.write(self.style.MIGRATE_HEADING("\n  Vision & OCR Engine"))
+        key_row, api_key = self._key_for(Engine.VISION, "GEMINI_API_KEY_BOOTSTRAP")
         if not api_key:
             self._note("no key configured - skipped (open item O-3)")
             return 0
 
-        pinned = settings.GEMINI_MODEL_VISION
+        pinned = key_row.resolved_model if key_row else settings.GEMINI_MODEL_VISION
         failures = 0
 
         try:
@@ -186,7 +202,7 @@ class Command(BaseCommand):
         try:
             from apps.ai.engines import VisionEngine
 
-            result = VisionEngine(api_key).describe(
+            result = VisionEngine(api_key, model=pinned).describe(
                 _probe_png(), mime_type="image/png", purpose="screenshot"
             )
             preview = (result.text[:60] + "...") if len(result.text) > 60 else result.text
