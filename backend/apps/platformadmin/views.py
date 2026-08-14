@@ -281,7 +281,12 @@ class PlatformUsageView(APIView):
         return Response(
             {
                 "window": {"since": since.isoformat(), "until": until.isoformat()},
-                "totals": rollups.platform_summary(since=since, until=until).as_dict(),
+                # Platform scope is the one place model identifiers are shown
+                # (D-136) - an operator choosing rates needs to know what to
+                # price.
+                "totals": rollups.platform_summary(since=since, until=until).as_dict(
+                    include_model_names=True
+                ),
                 "by_engine": rollups.platform_by_engine(since=since, until=until),
                 "by_model": rollups.platform_by_model(since=since, until=until),
                 "series": rollups.platform_series(since=since, until=until),
@@ -303,7 +308,7 @@ class PlatformTenantSpendView(APIView):
             {
                 "window": {"since": since.isoformat(), "until": until.isoformat()},
                 "tenants": rows,
-                "totals": totals.as_dict(),
+                "totals": totals.as_dict(include_model_names=True),
             }
         )
 

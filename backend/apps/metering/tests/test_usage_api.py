@@ -5,6 +5,7 @@ is therefore the *only* thing between those responses and every workspace's
 figures - so it is tested as a security control, not as a detail.
 """
 
+import json
 from decimal import Decimal
 
 import pytest
@@ -140,3 +141,53 @@ def test_the_window_parameter_is_clamped_rather_than_rejected(world):
     falls back to a sane window."""
     response = client_for(world["admin_a"], world["alpha"]).get("/api/v1/usage/summary/?days=-9")
     assert response.status_code == 200
+
+
+# ---------------------------------------------- model names (D-136) ----------
+
+
+def test_a_workspace_is_never_told_which_model_served_it(world):
+    """Model identifiers name the vendor as plainly as a logo would.
+
+    Phase 7A returned `unpriced_models: ["gemini-flash-latest", ...]` to any
+    workspace administrator. This is the regression test for that leak.
+    """
+    response = client_for(world["admin_a"], world["alpha"]).get("/api/v1/usage/summary/")
+
+    assert response.status_code == 200
+    body = json.dumps(response.data).lower()
+
+    for vendor in ("gemini", "google", "deepseek", "openai", "groq", "anthropic", "claude"):
+        assert vendor not in body, f"the workspace usage payload leaked {vendor!r}"
+    assert "unpriced_models" not in response.data["totals"]
+
+
+def test_a_workspace_still_learns_that_something_is_unpriced(world):
+    """The count survives even though the names do not - it tells a tenant
+    whether to trust its own cost figure."""
+    response = client_for(world["admin_a"], world["alpha"]).get("/api/v1/usage/summary/")
+    assert response.data["totals"]["unpriced_model_count"] >= 1
+
+
+def test_the_tenant_by_model_endpoint_no_longer_exists(world):
+    """It was the other half of the same leak."""
+    response = client_for(world["admin_a"], world["alpha"]).get("/api/v1/usage/by-model/")
+    assert response.status_code == 404
+
+
+def test_the_workspace_sees_its_usage_by_role_instead(world):
+    """A tenant is buying "text reasoning" and "vision", not a named model."""
+    response = client_for(world["admin_a"], world["alpha"]).get("/api/v1/usage/summary/")
+
+    engines = {row["engine"] for row in response.data["by_engine"]}
+    assert engines <= {"TEXT", "VISION"}
+    assert engines, "the breakdown by role must still be there"
+
+
+def test_the_platform_owner_does_get_model_names(world):
+    """The one surface where they belong - an operator setting rates has to
+    know what to price."""
+    response = client_for(world["owner"]).get("/api/v1/platform/usage/")
+
+    assert response.status_code == 200
+    assert "unpriced_models" in response.data["totals"]

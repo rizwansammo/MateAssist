@@ -241,3 +241,45 @@ def test_the_tool_only_proposes(conversation):
     description = prompts.ESCALATION_TOOL["function"]["description"]
     assert "PROPOSES" in description
     assert "user must confirm" in description
+
+
+# ------------------------------------------------- identity (D-135) ----------
+
+
+def flattened(tenant="Netswitch") -> str:
+    """The system prompt as one lowercase line.
+
+    The prompt is hard-wrapped for readability, so a phrase the test cares about
+    can straddle a newline. Matching against the wrapped text would make the
+    assertion depend on where the paragraph happens to break - and would tempt a
+    future editor to reflow the prompt to satisfy a test, which is backwards.
+    """
+    return " ".join(prompts.SYSTEM_PROMPT.format(tenant=tenant).split()).lower()
+
+
+def test_the_assistant_is_told_who_it_is():
+    """Asked "who are you?", the model answered "I am Gemini, a large language
+    model built by Google" - naming the vendor to a customer's employee and
+    contradicting the product name shown above the message."""
+    assert "You are MateAssist" in prompts.SYSTEM_PROMPT.format(tenant="Netswitch")
+    assert "do not discuss the ai model, vendor or infrastructure" in flattened()
+
+
+def test_the_identity_rule_names_no_vendor():
+    """A-010 makes the provider a dropdown. A rule saying "never say Gemini"
+    would be stale the moment someone selects DeepSeek - and would leave the new
+    vendor free to introduce itself."""
+    system = flattened()
+
+    for vendor in ("gemini", "google", "deepseek", "openai", "groq", "anthropic", "claude"):
+        assert vendor not in system, f"the system prompt hardcodes the vendor {vendor!r}"
+
+
+def test_the_assistant_is_not_instructed_to_lie():
+    """Declining to discuss infrastructure is fine. Actively denying it is not:
+    the workspace's contract already lists its sub-processors, and a product
+    that contradicts its own DPA is worse than one that stays quiet."""
+    system = flattened()
+
+    assert "do not deny anything" in system
+    assert "do not invent a different vendor" in system

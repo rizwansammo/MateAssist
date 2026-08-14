@@ -116,7 +116,11 @@ class TextEngine:
         except Exception as exc:  # noqa: BLE001
             if _looks_rate_limited(exc):
                 raise RateLimited(str(exc)) from exc
-            raise EngineError(f"DeepSeek call failed: {exc}") from exc
+            # Named by ROLE, not vendor. This adapter serves DeepSeek, OpenAI,
+            # Groq, Gemini's compatibility endpoint and anything else speaking
+            # the protocol (A-010), so a hardcoded vendor name here is wrong for
+            # most callers - it was reporting "DeepSeek call failed" for Gemini.
+            raise EngineError(f"Text engine call failed: {exc}") from exc
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         choice = response.choices[0]

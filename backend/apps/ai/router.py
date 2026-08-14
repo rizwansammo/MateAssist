@@ -159,7 +159,12 @@ def _call_with_pool(engine_name, build_client, invoke, *, tenant, user, operatio
             key = acquire(engine_name)
         except NoKeyAvailable:
             if last_error:
-                raise EngineError(
+                # Preserve the TYPE, not just the text. Every key being
+                # rate-limited is still a rate-limit problem, and the user-facing
+                # message is chosen by exception type - flattening this into a
+                # generic EngineError would tell the user "something went wrong"
+                # when the honest answer is "we are busy, try again shortly".
+                raise RateLimited(
                     f"{engine_name} pool exhausted after {attempt} attempt(s): {last_error}"
                 ) from last_error
             raise
@@ -195,6 +200,10 @@ def _call_with_pool(engine_name, build_client, invoke, *, tenant, user, operatio
         )
         return result
 
+    if isinstance(last_error, RateLimited):
+        raise RateLimited(
+            f"{engine_name}: every key was rate-limited across {max_attempts} attempts"
+        ) from last_error
     raise EngineError(f"{engine_name} call failed after {max_attempts} attempts: {last_error}")
 
 

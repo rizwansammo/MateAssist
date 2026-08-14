@@ -14,9 +14,10 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from apps.ai import router
-from apps.ai.engines import EngineError, NoKeyAvailable
+from apps.ai import router, user_messages
+from apps.ai.engines import EngineError, NoKeyAvailable, RateLimited
 from apps.knowledge import storage
+from apps.metering.budgets import BudgetExceeded
 from apps.tenancy.context import tenant_context
 
 from . import escalation, prompts, retrieval
@@ -36,6 +37,22 @@ MAX_HISTORY = 12  # turns carried into the prompt
 def _arm(tenant_id):
     with connection.cursor() as cursor:
         cursor.execute("SELECT set_config('app.tenant_id', %s, true)", [str(tenant_id)])
+
+
+def _status_for(exc) -> int:
+    """HTTP status by failure kind, so a client can react correctly.
+
+    429 tells a caller to back off and retry; 402 says the workspace has to act
+    commercially; 503 means nothing is configured. Returning 502 for all three
+    would make every failure look like a broken upstream.
+    """
+    if isinstance(exc, BudgetExceeded):
+        return status.HTTP_402_PAYMENT_REQUIRED
+    if isinstance(exc, RateLimited):
+        return status.HTTP_429_TOO_MANY_REQUESTS
+    if isinstance(exc, NoKeyAvailable):
+        return status.HTTP_503_SERVICE_UNAVAILABLE
+    return status.HTTP_502_BAD_GATEWAY
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
@@ -63,8 +80,15 @@ class ConversationViewSet(viewsets.ModelViewSet):
             user_message, hits, attachment_description = self._prepare(
                 request, conversation, payload.validated_data
             )
-        except EngineError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+        except (EngineError, BudgetExceeded) as exc:
+            return Response(
+                {
+                    "detail": user_messages.report(
+                        exc, context="chat.attachment", tenant=request.tenant, user=request.user
+                    )
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
 
         messages = prompts.build_messages(
             tenant_name=request.tenant.name,
@@ -84,13 +108,18 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 # the budget thinking and returns empty content (A-010).
                 max_tokens=1500,
             )
-        except NoKeyAvailable:
+        # BudgetExceeded is not an EngineError, so before D-135 it escaped both
+        # handlers and returned a 500 - an enforced cap crashed the chat instead
+        # of explaining itself.
+        except (EngineError, BudgetExceeded) as exc:
             return Response(
-                {"detail": "No text engine is configured. Ask your platform administrator."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                {
+                    "detail": user_messages.report(
+                        exc, context="chat.send", tenant=request.tenant, user=request.user
+                    )
+                },
+                status=_status_for(exc),
             )
-        except EngineError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
 
         assistant = self._persist_answer(conversation, result, hits)
         return Response(MessageSerializer(assistant).data)
@@ -116,8 +145,15 @@ class ConversationViewSet(viewsets.ModelViewSet):
             user_message, hits, attachment_description = self._prepare(
                 request, conversation, payload.validated_data
             )
-        except EngineError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+        except (EngineError, BudgetExceeded) as exc:
+            return Response(
+                {
+                    "detail": user_messages.report(
+                        exc, context="chat.stream.attachment", tenant=tenant, user=user
+                    )
+                },
+                status=_status_for(exc),
+            )
 
         messages = prompts.build_messages(
             tenant_name=tenant.name,
@@ -143,16 +179,16 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 for delta in client.stream(messages):
                     collected.append(delta)
                     yield event("delta", {"text": delta})
-            except NoKeyAvailable as exc:
-                # Report the pool's own reason. A generic "not configured"
-                # message hides whether the pool is empty, cooling down or
-                # quota-exhausted - three problems with three different fixes.
-                logger.warning("chat stream could not acquire a text key: %s", exc)
-                yield event("error", {"detail": f"No usable text engine: {exc}"})
-                return
             except Exception as exc:  # noqa: BLE001
-                logger.exception("chat stream failed")
-                yield event("error", {"detail": str(exc)[:300]})
+                # D-135: the user gets a sentence, never the provider's text.
+                # This is the path that leaked a raw Gemini 429 - vendor name,
+                # quota position, Google's docs URL and Python dict formatting -
+                # into a helpdesk user's chat window.
+                #
+                # `report` writes the real error to the log and the audit trail,
+                # so an operator loses nothing by the user gaining clarity.
+                detail = user_messages.report(exc, context="chat.stream", tenant=tenant, user=user)
+                yield event("error", {"detail": detail})
                 return
 
             answer = "".join(collected).strip()

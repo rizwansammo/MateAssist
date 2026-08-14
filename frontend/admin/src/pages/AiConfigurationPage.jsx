@@ -35,13 +35,13 @@ function EngineSection({ engine, keys, loading, onAdd, onRotate, onRevoke, onPur
           <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-[18px] font-semibold tracking-tight text-ink">{engine.section}</h2>
             <Pill tone={engine.tone} dot={false}>
-              {engine.provider}
+              {live.length} key{live.length === 1 ? "" : "s"}
             </Pill>
           </div>
           <p className="mt-2 max-w-[560px] text-[13px] leading-relaxed text-slate-500">
             {engine.purpose}
           </p>
-          <div className="mt-2 font-mono text-xs text-slate-500">{engine.models.join("  |  ")}</div>
+          <div className="mt-2 text-xs text-slate-500">{engine.role}</div>
         </div>
         <button
           type="button"
@@ -162,7 +162,7 @@ function EngineSection({ engine, keys, loading, onAdd, onRotate, onRevoke, onPur
             {!loading && keys.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-6 py-10 text-center text-[13.5px] text-slate-500">
-                  No {engine.provider} keys configured.
+                  No keys configured for this engine.
                 </td>
               </tr>
             )}
@@ -283,9 +283,7 @@ export default function AiConfigurationPage() {
             <div key={row.task} className="flex flex-wrap items-center gap-3 bg-[#0F1B2D] px-4 py-3">
               <span className="min-w-[116px] text-xs text-slate-400">{row.task}</span>
               <ArrowRight size={14} className="text-slate-700" />
-              <span className={`font-mono text-[12.5px] font-semibold ${row.colour}`}>
-                {row.model}
-              </span>
+              <span className={`text-[12.5px] font-semibold ${row.colour}`}>{row.engine}</span>
             </div>
           ))}
         </div>
@@ -294,9 +292,9 @@ export default function AiConfigurationPage() {
             Isolation guarantee
           </div>
           <p className="mt-2 text-[12.5px] leading-relaxed text-slate-400">
-            Images reach Gemini and stop there; only the text it returns continues to DeepSeek.
-            Enforced at the engine client boundary, where the text client has no parameter capable
-            of carrying an image.
+            Images reach the vision engine and stop there; only the text it returns continues to
+            the text engine. Enforced at the engine client boundary, where the text client has no
+            parameter capable of carrying an image - whichever provider serves the role.
           </p>
         </div>
       </div>

@@ -89,8 +89,19 @@ class Summary:
     def success_rate(self) -> float:
         return round((self.requests - self.failed) / self.requests, 4) if self.requests else 0.0
 
-    def as_dict(self) -> dict:
-        return {
+    def as_dict(self, *, include_model_names: bool = False) -> dict:
+        """Serialise for the API.
+
+        `include_model_names` defaults to **False**, and the default is the
+        point (D-136). Model identifiers name the vendor - `gemini-flash-latest`
+        says Google as plainly as a logo would - and a workspace is not told
+        which provider serves its engines. Only the platform surface passes True.
+
+        Tenants still learn that something is unpriced, via a count, because
+        that affects whether they can trust their own cost figure. They just do
+        not learn what it is called.
+        """
+        payload: dict = {
             "requests": self.requests,
             "failed": self.failed,
             "success_rate": self.success_rate,
@@ -100,8 +111,11 @@ class Summary:
             "images": self.images,
             "cost_usd": str(self.cost_usd),
             "avg_latency_ms": self.avg_latency_ms,
-            "unpriced_models": self.unpriced_models,
+            "unpriced_model_count": len(self.unpriced_models),
         }
+        if include_model_names:
+            payload["unpriced_models"] = self.unpriced_models
+        return payload
 
 
 _AGGREGATES = {

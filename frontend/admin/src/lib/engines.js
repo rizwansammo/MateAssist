@@ -17,6 +17,12 @@ export const ENGINES = [
   {
     id: "TEXT",
     section: "Text & Reasoning Engine",
+    // A-010 deleted the `provider` and `models` fields from these objects when
+    // the vendor became configuration. The page kept reading `engine.models`,
+    // and `undefined.join()` crashed the whole route - so /ai rendered blank
+    // from A-010 until D-137. `role` replaces both: it describes the job, which
+    // is fixed, rather than the vendor, which is not.
+    role: "Serves every text workload. Whichever provider fills it.",
     purpose: "Intent classification, RAG answering, escalation drafting, tool calling.",
     receives: "Text only - text chunks, image descriptions, conversation history.",
     neverReceives: "Images. TextEngine has no parameter capable of carrying one.",
@@ -27,6 +33,7 @@ export const ENGINES = [
   {
     id: "VISION",
     section: "Vision & OCR Engine",
+    role: "Serves every image workload. Whichever provider fills it.",
     purpose: "Image description and OCR during runbook ingestion and chat screenshots.",
     receives: "Images. Returns text, and is called for nothing else.",
     neverReceives: "Chat history, retrieved chunks, or any reasoning workload.",
@@ -94,9 +101,16 @@ export const KEY_STATUS_LABEL = {
  * D-045: with two engines in fixed, non-overlapping roles there is nothing to
  * route. This is a read-only statement of the contract, not a policy panel.
  */
+// Which ROLE handles which task. Not which model - that was the old shape, and
+// it rotted: this list still claimed `gemini-2.5-flash` months after A-009
+// found that model dead, and `deepseek-chat` was never actually running.
+//
+// A hardcoded model name in the UI is a fact with no source. The role mapping
+// is fixed by architecture, so it cannot go stale (D-137). The model actually
+// serving a role is shown against its key, where it comes from the database.
 export const ENGINE_ASSIGNMENT = [
-  { task: "Intent classify", model: "deepseek-chat", colour: "text-emerald-300" },
-  { task: "Runbook RAG", model: "deepseek-chat", colour: "text-emerald-300" },
-  { task: "Escalation draft", model: "deepseek-chat", colour: "text-emerald-300" },
-  { task: "Image / OCR", model: "gemini-2.5-flash", colour: "text-cyan-300" }
+  { task: "Intent classify", engine: "Text & Reasoning", colour: "text-emerald-300" },
+  { task: "Runbook RAG", engine: "Text & Reasoning", colour: "text-emerald-300" },
+  { task: "Escalation draft", engine: "Text & Reasoning", colour: "text-emerald-300" },
+  { task: "Image / OCR", engine: "Vision & OCR", colour: "text-cyan-300" }
 ];

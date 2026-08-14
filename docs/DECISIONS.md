@@ -693,3 +693,104 @@ That is correct — a rate change must never rewrite an invoice already issued �
 but it means traffic recorded before a `ModelPrice` exists reads `$0.00`
 permanently. `seed_dev` now seeds rates, and `Summary.unpriced_models` names
 anything still missing on every total. There is no backfill command.
+
+---
+
+## A-013 — Phase 7C: the product stops naming its vendor
+
+**Status: accepted, 2026-08-15.** Adds D-135, D-136, D-137.
+
+Three leaks and one dead page, all found by using the running product rather than
+by reading the code.
+
+### D-135 — a user never sees a provider's error text
+
+A rate-limited Gemini call put this in a helpdesk user's chat window:
+
+```
+Error code: 429 - [{'error': {'code': 429, 'message': 'You exceeded your current
+quota, please check your plan and billing details. For more information on this
+error, head to: https://ai.google.dev/gemini-api/docs/rate-limits.
+```
+
+Four leaks in one toast: the vendor, the workspace's quota position, the vendor's
+documentation URL, and raw Python dict formatting. None of it helps someone whose
+VPN will not connect.
+
+`apps/ai/user_messages.py` maps an exception **by type** to one of four
+sentences, and `report()` writes the real error to the log and an `AuditEvent` so
+an operator loses nothing:
+
+| Failure | User sees |
+|---|---|
+| Rate-limited, or every key throttled | *MateAssist is handling a lot of requests right now. Please try again in a moment.* |
+| No usable key configured | *MateAssist can't reach the assistant right now. Your IT team has been notified.* |
+| Budget cap reached | *This workspace has reached its monthly usage limit. Contact your IT administrator to continue.* |
+| Anything else | *MateAssist couldn't complete that request. Please try again.* |
+
+**Mapped by type, never by string matching**, and an unrecognised exception falls
+through to the generic sentence — a new failure mode must never default to
+exposing its own text. HTTP status carries the distinction a client needs: 429 to
+back off, 402 to act commercially, 503 for nothing configured.
+
+Two consequences of doing it properly:
+
+* The router now re-raises an exhausted pool as `RateLimited` rather than a
+  generic `EngineError`. Every key being throttled is still a rate-limit problem,
+  and flattening the type would have told the user "something went wrong" when
+  the honest answer is "we are busy".
+* **`BudgetExceeded` was returning HTTP 500.** It is not an `EngineError`, so it
+  escaped both handlers in the chat view — an enforced cap crashed the chat
+  instead of explaining itself. Nobody had run into it because no budget was
+  enforced yet.
+
+### D-135 (identity) — the assistant does not discuss what it runs on
+
+Asked "who are you?", the product answered *"I am Gemini, a large language model
+built by Google"* — under a header reading MATEASSIST.
+
+The system prompt now states its identity and declines to discuss the model,
+vendor or infrastructure. Two deliberate choices:
+
+* **The rule names no vendor.** "Never say you are Gemini" would be stale the
+  moment A-010's dropdown selects DeepSeek, and would leave the new vendor free
+  to introduce itself. A test asserts no vendor string appears in the prompt.
+* **It declines rather than denies.** Under GDPR Article 28 a customer's contract
+  already lists its sub-processors, so the fact is disclosed where it belongs.
+  A product that actively contradicts its own DPA is worse than one that stays
+  quiet.
+
+A system prompt is not a guarantee — a determined user can break character. This
+makes the normal case reliable; it is not a security control.
+
+### D-136 — model identifiers are platform-scope only
+
+`unpriced_models` returned `["gemini-flash-latest", "gemini-3.6-flash"]` to any
+workspace administrator, and `/usage/by-model/` listed them outright. A model
+identifier names the vendor as plainly as a logo would.
+
+`Summary.as_dict()` now defaults `include_model_names=False`; only the platform
+surface passes True. Tenants still get `unpriced_model_count`, because that
+affects whether they can trust their own cost figure — they just do not learn
+what the models are called. The tenant by-model endpoint is deleted; a workspace
+sees its usage by **role** ("Text & reasoning", "Vision & OCR"), which is what it
+is buying.
+
+### D-137 — the UI states roles, never hardcoded model names
+
+`/ai` rendered a blank page. `ENGINES` lost its `provider` and `models` fields
+when A-010 made the vendor configuration, but the component still called
+`engine.models.join()` — `undefined.join()` throws, React unmounts the tree, and
+the route dies. **It had been broken since A-010**, invisible because a build
+cannot catch a runtime error and nobody opened the page.
+
+The same file's "Engine assignment" panel still claimed `deepseek-chat` (never
+running) and `gemini-2.5-flash` (dead since A-009). A hardcoded model name in the
+UI is a fact with no source, and both had rotted.
+
+Fixed by describing roles. The model actually serving a role is shown against its
+key, where it comes from the database — and that is the only place in either app
+where a model name appears.
+
+Also corrected: the text adapter reported `"DeepSeek call failed"` for a Gemini
+call. The one place naming a vendor named the wrong one.

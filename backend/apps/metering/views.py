@@ -99,12 +99,13 @@ class UsageSeriesView(APIView):
         )
 
 
-class UsageByModelView(APIView):
-    permission_classes = [IsAuthenticated, IsWorkspaceAdmin]
-
-    @extend_schema(parameters=[WINDOW_PARAM], responses={200: dict})
-    def get(self, request):
-        since, until = _window(request)
-        return Response(
-            {"by_model": rollups.tenant_by_model(request.tenant, since=since, until=until)}
-        )
+# There is deliberately no tenant-facing by-model endpoint (D-136).
+#
+# Phase 7A shipped one. It listed `gemini-flash-latest` and `gemini-3.6-flash`
+# to any workspace administrator, which names the vendor as clearly as a logo
+# would. A workspace sees its consumption broken down by ROLE - "Text &
+# reasoning", "Vision & OCR" - because that is what it is buying. Which company
+# serves the role is platform configuration, disclosed in the contract rather
+# than in a usage table.
+#
+# `rollups.tenant_by_model` still exists for platform-side reporting.
