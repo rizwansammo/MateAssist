@@ -8,6 +8,7 @@ from .views import (
     PlatformUsageView,
     ProviderKeyViewSet,
     TenantBudgetViewSet,
+    TenantViewSet,
 )
 
 app_name = "platformadmin"
@@ -16,6 +17,7 @@ router = DefaultRouter()
 router.register("platform/keys", ProviderKeyViewSet, basename="providerkey")
 router.register("platform/prices", ModelPriceViewSet, basename="modelprice")
 router.register("platform/budgets", TenantBudgetViewSet, basename="tenantbudget")
+router.register("platform/tenants", TenantViewSet, basename="platformtenant")
 
 urlpatterns = router.urls + [
     path("platform/usage/", PlatformUsageView.as_view(), name="platform-usage"),

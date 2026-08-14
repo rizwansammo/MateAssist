@@ -1,29 +1,81 @@
+import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowRight, BookOpen, Bot } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { Metric, QuickAction } from "@mateassist/ui";
+import { Metric, Pill, QuickAction } from "@mateassist/ui";
 
-import { StatusBadge } from "../components/StatusBadge.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { usePortal } from "../context/PortalContext.jsx";
+import { knowledgeApi } from "../lib/knowledge.js";
+
+function greeting(hour) {
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+/** Open / Escalated / Resolved, derived from the fields the backend sets. */
+function state(conversation) {
+  if (conversation.escalated_at) return { label: "Escalated", tone: "warn" };
+  if (conversation.resolved) return { label: "Resolved", tone: "ok" };
+  return { label: "Open", tone: "info" };
+}
+
+function when(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric"
+  });
+}
 
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const { tickets, counts } = usePortal();
+  const { conversations, counts, loading, error, refresh } = usePortal();
   const { user } = useAuth();
   const firstName = (user?.display_name ?? "").split(" ")[0] || "there";
+
+  const now = new Date();
+  const [documents, setDocuments] = useState(null);
+
+  useEffect(() => {
+    let live = true;
+    knowledgeApi
+      .listDocuments()
+      .then((payload) => {
+        if (!live) return;
+        const rows = Array.isArray(payload) ? payload : (payload?.results ?? []);
+        setDocuments(payload?.count ?? rows.length);
+      })
+      .catch(() => {
+        if (live) setDocuments(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   return (
     <main className="flex flex-col gap-7 px-7 pb-12 pt-8">
       <div className="flex flex-wrap items-end justify-between gap-6">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-            Tuesday, 5 August 2026
+            {now.toLocaleDateString("en-GB", {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+              year: "numeric"
+            })}
           </div>
           <h1 className="mb-2 mt-2.5 text-[32px] font-semibold tracking-tight text-ink">
-            Good morning, {firstName}
+            {greeting(now.getHours())}, {firstName}
           </h1>
           <p className="text-[14.5px] text-slate-600">
-            You have {counts.Open + counts.Pending} tickets in progress.
+            {loading
+              ? "Loading your requests..."
+              : counts.all === 0
+                ? "You have not asked the assistant anything yet."
+                : `${counts.open} open request${counts.open === 1 ? "" : "s"} of ${counts.all}.`}
           </p>
         </div>
         <button
@@ -37,32 +89,33 @@ export default function DashboardPage() {
       </div>
 
       {/*
-        Every tile here maps to a figure the backend can actually produce:
-        open count and assignee from the helpdesk tables (Phase 3), average
-        resolution from ticket state transitions, and AI-resolved from
-        conversations closed without escalation (Phase 6/7).
+        Every tile maps to a figure the backend actually produces. The
+        prototype's "avg. resolution", "assigned engineer" and read-time metrics
+        are gone: there is no ticket table behind them (A-008) and no engineer
+        assignment model, so they could only ever have been invented.
       */}
       <div className="grid gap-px border border-hairline bg-hairline sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label="Open tickets" value={counts.Open} note="1 awaiting your reply" />
         <Metric
-          label="Avg. resolution"
-          value="41m"
-          note="down 18% vs last month"
-          noteClass="text-emerald-700"
+          label="Open requests"
+          value={loading ? "--" : counts.open}
+          note="Not yet escalated or resolved"
         />
-        <Metric label="Resolved by AI" value="18" note="76% of your requests" />
-        <div className="rounded-none bg-white px-6 py-5">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-            Assigned engineer
-          </div>
-          <div className="mt-3 flex items-center gap-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-none bg-slate-800 text-[11px] font-semibold text-white">
-              DK
-            </div>
-            <div className="text-sm font-medium text-ink">Daniel Koch</div>
-          </div>
-          <div className="mt-1.5 text-xs text-slate-400">Tier 2 - Online now</div>
-        </div>
+        <Metric
+          label="Handed to a human"
+          value={loading ? "--" : counts.escalated}
+          note="Emailed to your IT team"
+          noteClass={counts.escalated ? "text-amber-700" : "text-slate-400"}
+        />
+        <Metric
+          label="Total conversations"
+          value={loading ? "--" : counts.all}
+          note="Across this workspace account"
+        />
+        <Metric
+          label="Runbooks available"
+          value={documents ?? "--"}
+          note="Maintained by your IT team"
+        />
       </div>
 
       <div>
@@ -84,7 +137,7 @@ export default function DashboardPage() {
             tint="border-cyan-200 bg-cyan-50"
             icon={<AlertTriangle size={19} strokeWidth={1.8} className="text-cyan-700" />}
             title="Report an issue"
-            body="Hardware, access or outage. Routed to the right queue automatically."
+            body="Paste a screenshot. The assistant reads it and answers from your runbooks."
           />
           <QuickAction
             onClick={() => navigate("/app/knowledge")}
@@ -100,48 +153,89 @@ export default function DashboardPage() {
       <div className="rounded-none border border-hairline bg-white">
         <div className="flex items-center justify-between border-b border-hairline px-6 py-4">
           <div>
-            <div className="text-[15px] font-semibold text-ink">Recent tickets</div>
-            <div className="mt-0.5 text-[12.5px] text-slate-500">Last 30 days</div>
+            <div className="text-[15px] font-semibold text-ink">Recent conversations</div>
+            <div className="mt-0.5 text-[12.5px] text-slate-500">Your requests, newest first</div>
           </div>
           <button
             type="button"
-            onClick={() => navigate("/app/tickets")}
+            onClick={() => navigate("/app/chat")}
             className="flex flex-none items-center gap-2 whitespace-nowrap rounded-none border border-slate-300 bg-white px-3.5 py-2 text-[12.5px] font-medium text-ink transition hover:bg-slate-50"
           >
-            View all
+            Open assistant
             <ArrowRight size={14} />
           </button>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="bg-slate-50 text-left text-[10.5px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                <th className="border-b border-hairline px-6 py-3">Ticket</th>
-                <th className="border-b border-hairline px-4 py-3">Subject</th>
-                <th className="border-b border-hairline px-4 py-3">Status</th>
-                <th className="border-b border-hairline px-6 py-3">Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tickets.slice(0, 4).map((ticket) => (
-                <tr key={ticket.id}>
-                  <td className="whitespace-nowrap border-b border-slate-100 px-6 py-4 font-mono text-[12.5px] text-ink">
-                    {ticket.id}
-                  </td>
-                  <td className="border-b border-slate-100 px-4 py-4 text-[13.5px] text-ink">
-                    {ticket.subject}
-                  </td>
-                  <td className="border-b border-slate-100 px-4 py-4">
-                    <StatusBadge status={ticket.status} />
-                  </td>
-                  <td className="whitespace-nowrap border-b border-slate-100 px-6 py-4 text-[13px] text-slate-500">
-                    {ticket.date}
-                  </td>
+
+        {loading ? (
+          <div className="flex flex-col gap-2.5 px-6 py-6" role="status" aria-live="polite">
+            <span className="sr-only">Loading conversations</span>
+            {[0, 1, 2].map((row) => (
+              <div
+                key={row}
+                className="h-3 animate-pulse rounded-none bg-slate-100"
+                style={{ width: `${90 - row * 15}%` }}
+              />
+            ))}
+          </div>
+        ) : error ? (
+          <div className="px-6 py-10 text-center">
+            <div className="text-sm font-semibold text-ink">Could not load your conversations</div>
+            <div className="mt-1.5 text-[12.5px] text-slate-500">
+              {error.status === 0 ? "The service is unreachable." : error.message}
+            </div>
+            <button
+              type="button"
+              onClick={refresh}
+              className="mt-4 rounded-none border border-slate-300 bg-white px-4 py-2 text-[12.5px] font-semibold text-ink transition hover:bg-slate-50"
+            >
+              Try again
+            </button>
+          </div>
+        ) : conversations.length === 0 ? (
+          <div className="px-6 py-10 text-center">
+            <div className="text-sm font-semibold text-ink">Nothing here yet</div>
+            <div className="mt-1.5 text-[12.5px] text-slate-500">
+              Ask the assistant a question and it will appear here.
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate("/app/chat")}
+              className="mt-4 rounded-none bg-emerald-600 px-4 py-2 text-[12.5px] font-semibold text-white transition hover:bg-emerald-700"
+            >
+              Start a conversation
+            </button>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="bg-slate-50 text-left text-[10.5px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                  <th className="border-b border-hairline px-6 py-3">Subject</th>
+                  <th className="border-b border-hairline px-4 py-3">State</th>
+                  <th className="border-b border-hairline px-6 py-3">Updated</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {conversations.slice(0, 5).map((conversation) => {
+                  const badge = state(conversation);
+                  return (
+                    <tr key={conversation.id}>
+                      <td className="border-b border-slate-100 px-6 py-4 text-[13.5px] text-ink">
+                        {conversation.title || "Untitled request"}
+                      </td>
+                      <td className="border-b border-slate-100 px-4 py-4">
+                        <Pill tone={badge.tone}>{badge.label}</Pill>
+                      </td>
+                      <td className="whitespace-nowrap border-b border-slate-100 px-6 py-4 text-[13px] text-slate-500">
+                        {when(conversation.updated_at)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </main>
   );

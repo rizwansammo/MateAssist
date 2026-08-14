@@ -16,11 +16,13 @@ from apps.metering.models import Operation, TenantBudget, UsageEvent, compute_co
 from apps.tenancy.models import Tenant
 from apps.tenancy.tests.test_isolation import set_db_tenant
 
-# Declared so that touching the `admin` alias does not raise
-# DatabaseOperationForbidden. It does NOT give these tests the owner's
-# credentials: `admin` is a MIRROR of `default` in test settings, which makes
-# Django hand both aliases the same app-role connection. See
-# test_platform_reads_cannot_be_proven_in_process for what that costs.
+# Non-transactional on purpose: this module tests the RLS-enforced *tenant*
+# scope, where the point is the database refusing to cross a boundary.
+#
+# `admin` is declared only so that touching it does not raise
+# DatabaseOperationForbidden. Cross-tenant reads are exercised in
+# test_platform_rollups.py, which is transactional for the reason documented
+# there.
 pytestmark = pytest.mark.django_db(databases=["default", "admin"])
 
 User = get_user_model()
@@ -93,33 +95,22 @@ def test_a_deliberately_wrong_filter_still_cannot_cross_tenants(two_workspaces):
     assert leaked.cost_usd == Decimal("0")
 
 
-def test_platform_reads_cannot_be_proven_in_process(two_workspaces):
+def test_platform_reads_are_invisible_to_an_uncommitted_test(two_workspaces):
     """**Read this before "fixing" a platform rollup that returns zero here.**
 
-    In test settings `admin` is declared as `TEST: {"MIRROR": "default"}`, which
-    makes Django hand both aliases the *same connection object* - the one
-    authenticated as the NOSUPERUSER app role. The superuser connection that
-    makes `platform_*` work in production therefore does not exist inside the
-    test suite, and every cross-tenant rollup comes back empty.
+    The `admin` alias is a separate connection as the database superuser, so it
+    cannot see this test's *uncommitted* writes on `default`. That is a property
+    of transaction isolation, not a flaw in the rollup.
 
-    MIRROR is not a mistake to be removed. Without it the two aliases get
-    separate connections, and a non-transactional test's uncommitted writes on
-    `default` are invisible to `admin` - so the rollups would read zero for a
-    different reason, and every test that triggers a platform-scope audit write
-    would have to declare a second database.
-
-    The consequence is stated plainly: **this suite cannot verify cross-tenant
-    aggregation.** That is done against the real database, with both real roles
-    and committed data, by `manage.py usage_demo` - the Phase 7A gate. This is
-    the same principle as A-006: a green suite is not evidence that something
-    works, and four separate bugs in this project were invisible until something
-    was actually run.
+    Cross-tenant aggregation is verified for real in `test_platform_rollups.py`,
+    which runs with `transaction=True` so the data is actually committed. This
+    test pins the boundary so the two modules cannot be confused for each other.
     """
     set_db_tenant(None)
 
     assert rollups.platform_summary().requests == 0, (
-        "If this ever returns rows, the admin alias has stopped mirroring and "
-        "the platform tests above can - and should - be made real."
+        "Uncommitted rows became visible across connections - either these tests "
+        "are now transactional, or the alias configuration changed."
     )
 
 

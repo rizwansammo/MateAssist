@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Check, Eye, Lock, X } from "lucide-react";
 
-import { providersFor } from "../seed/engines.js";
+import { providersFor } from "../lib/engines.js";
 
 /**
  * Add / rotate a provider credential.

@@ -9,6 +9,10 @@
 export const TONE = {
   ok: "border-emerald-200 bg-emerald-50 text-emerald-700",
   warn: "border-amber-200 bg-amber-50 text-amber-700",
+  // A failed dependency is not a warning. Health reports ok/degraded/error, and
+  // rendering "error" in amber tells an operator the database is merely slow
+  // when it is actually down.
+  bad: "border-red-200 bg-red-50 text-red-700",
   info: "border-cyan-200 bg-cyan-50 text-cyan-700",
   off: "border-hairline bg-slate-50 text-slate-500"
 };
@@ -16,6 +20,7 @@ export const TONE = {
 export const TONE_DOT = {
   ok: "bg-emerald-600",
   warn: "bg-amber-600",
+  bad: "bg-red-600",
   info: "bg-cyan-600",
   off: "bg-slate-400"
 };

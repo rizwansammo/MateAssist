@@ -9,6 +9,7 @@ fails the build if one ever appears.
 from rest_framework import serializers
 
 from apps.ai.models import PROVIDER_DEFAULTS, Engine, ModelPrice, Provider, ProviderKey
+from apps.tenancy.models import Tenant
 
 
 class ProviderKeySerializer(serializers.ModelSerializer):
@@ -88,6 +89,40 @@ class ProviderKeyWriteSerializer(serializers.Serializer):
                 {"model": f"A model id is required - {provider} has no default for {engine}."}
             )
         return attrs
+
+
+class TenantSerializer(serializers.ModelSerializer):
+    """The workspace registry, for the platform Tenants screen.
+
+    Counts are annotated by the viewset on the RLS-bypassing connection - a
+    per-row `.count()` here would be one query per tenant, and would return zero
+    anyway, since a tenant-scoped related manager reads a ContextVar the platform
+    surface never sets.
+    """
+
+    # Sourced from the viewset's annotations, which are deliberately named
+    # `*_count` because `documents` is already Tenant's reverse accessor for
+    # Document and annotating over it fails at query-build time.
+    users = serializers.IntegerField(source="user_count", read_only=True)
+    documents = serializers.IntegerField(source="document_count", read_only=True)
+    subdomain = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Tenant
+        fields = (
+            "id",
+            "name",
+            "slug",
+            "subdomain",
+            "plan",
+            "region",
+            "status",
+            "support_email",
+            "users",
+            "documents",
+            "created_at",
+        )
+        read_only_fields = ("id", "slug", "subdomain", "users", "documents", "created_at")
 
 
 class ModelPriceSerializer(serializers.ModelSerializer):

@@ -1,8 +1,10 @@
 /**
  * The engine contract, expressed for the UI.
  *
- * NOT seed data - this survives every phase. `SEED_KEYS` is gone: the key pool
- * tables now read the live vault API (Phase 4).
+ * Configuration, not data - which is why this lives in lib/ and the seed/
+ * directory no longer exists (Phase 7B). Nothing here is a stand-in for a
+ * backend response: the key pool reads the live vault API, and these are the
+ * labels and provider options the operator UI renders around it.
  *
  * Groq and OpenAI are absent entirely (D-044/D-085). There is no fallback
  * provider in v1.

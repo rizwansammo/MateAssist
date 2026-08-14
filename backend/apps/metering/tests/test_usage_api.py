@@ -86,10 +86,9 @@ def test_platform_usage_refuses_an_anonymous_caller():
 
 
 def test_platform_spend_is_reachable_by_an_owner(world):
-    """Only the *authorisation* is assertable here. The figures come back empty
-    because `admin` mirrors `default` in tests and RLS hides every row - see the
-    long note in test_rollups.test_platform_reads_cannot_be_proven_in_process.
-    The real numbers are proven by `manage.py usage_demo`."""
+    """Authorisation only. The figures are empty here because the platform alias
+    is a separate connection that cannot see this test's uncommitted rows; the
+    real numbers are asserted in test_platform_rollups.py, which commits."""
     response = client_for(world["owner"]).get("/api/v1/platform/spend/")
 
     assert response.status_code == 200

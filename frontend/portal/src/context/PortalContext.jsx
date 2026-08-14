@@ -1,20 +1,24 @@
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-import { SEED_TICKETS } from "../seed/tickets.js";
+import { chatApi } from "../lib/chat.js";
 
 /**
  * Portal-wide state seam.
  *
- * Dashboard, My Tickets and AI Support all read the same ticket list, so it
- * lives above them rather than being duplicated per page. Today it is seeded
- * (see seed/README.md); in Phase 3 the internals become TanStack Query calls
- * against the helpdesk API while this hook's shape stays the same - so the
- * pages consuming it do not change.
+ * Was the ticket list. A-008 retired internal ticketing in favour of an email
+ * handoff to whatever helpdesk the workspace already runs, so there is no ticket
+ * table to read and inventing one in the UI would be a fabricated fact.
+ *
+ * What replaced it is the thing the product actually keeps: the user's own
+ * conversations, each of which is either still open, escalated to a human, or
+ * resolved by the assistant.
  */
 const PortalContext = createContext(null);
 
 export function PortalProvider({ children }) {
-  const [tickets, setTickets] = useState(SEED_TICKETS);
+  const [conversations, setConversations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [toast, setToast] = useState(null);
 
   const notify = useCallback((title, body, tone = "ok") => {
@@ -23,43 +27,42 @@ export function PortalProvider({ children }) {
 
   const dismissToast = useCallback(() => setToast(null), []);
 
-  const counts = useMemo(
-    () => ({
-      All: tickets.length,
-      Open: tickets.filter((t) => t.status === "Open").length,
-      Pending: tickets.filter((t) => t.status === "Pending").length,
-      Resolved: tickets.filter((t) => t.status === "Resolved").length
-    }),
-    [tickets]
-  );
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const payload = await chatApi.listConversations();
+      setConversations(Array.isArray(payload) ? payload : (payload?.results ?? []));
+    } catch (cause) {
+      setError(cause);
+      setConversations([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   /**
-   * Phase 3 replaces this with POST /api/v1/tickets/. The ticket number is
-   * assigned by a database sequence there, never client-side (D-120).
+   * A conversation is escalated, resolved, or still open - derived from the two
+   * fields the backend actually sets, not from a status column that would need
+   * to be kept in sync.
    */
-  const createTicket = useCallback(
-    (draft) => {
-      const ticket = {
-        id: "IT-10943",
-        subject: draft?.subject ?? "Microsoft 365 password reset blocked by MFA change",
-        meta: draft?.meta ?? "Opened by MateAssist from chat - Priority High",
-        category: draft?.category ?? "Access",
-        status: "Open",
-        date: "5 Aug 2026"
-      };
-      setTickets((prev) => [ticket, ...prev]);
-      notify(
-        `Ticket ${ticket.id} created successfully`,
-        "Assigned to Daniel Koch - Identity & Access - SLA 4 hours"
-      );
-      return ticket;
-    },
-    [notify]
+  const counts = useMemo(
+    () => ({
+      all: conversations.length,
+      escalated: conversations.filter((c) => c.escalated_at).length,
+      resolved: conversations.filter((c) => c.resolved).length,
+      open: conversations.filter((c) => !c.escalated_at && !c.resolved).length
+    }),
+    [conversations]
   );
 
   const value = useMemo(
-    () => ({ tickets, counts, createTicket, toast, notify, dismissToast }),
-    [tickets, counts, createTicket, toast, notify, dismissToast]
+    () => ({ conversations, counts, loading, error, refresh, toast, notify, dismissToast }),
+    [conversations, counts, loading, error, refresh, toast, notify, dismissToast]
   );
 
   return <PortalContext.Provider value={value}>{children}</PortalContext.Provider>;

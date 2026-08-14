@@ -118,17 +118,29 @@ comes back empty — a billing dashboard confidently reporting that nobody has
 spent anything, with no error anywhere. Both functions now take an `alias` and
 the platform surface passes `PLATFORM_ALIAS`. The gate asserts both halves.
 
-**The test suite cannot verify cross-tenant aggregation, and says so.** In test
-settings `admin` is `TEST: {"MIRROR": "default"}`, which hands both aliases the
-*same* app-role connection — so the RLS bypass that platform reporting depends on
-does not exist in-process, and every `platform_*` rollup reads zero. Removing
-MIRROR does not help: the aliases then get separate connections and a
-non-transactional test's uncommitted writes are invisible to the second one.
+**Cross-tenant aggregation initially looked untestable — and that diagnosis was
+wrong.** Every `platform_*` rollup returned zero in-process, and I recorded the
+cause as `TEST: {"MIRROR": "default"}` handing both aliases the *same* app-role
+connection.
 
-Rather than weaken something to make a green test, the limitation is written down
-in `test_platform_reads_cannot_be_proven_in_process` and the claim is proven by
-`usage_demo` against the real database with both real roles. This is A-006
-again: four bugs in this project were invisible to a green suite.
+Measuring it in Phase 7B disproved that. The `admin` alias is a genuinely
+separate connection authenticated as the superuser:
+
+```
+default alias : user=mateassist_app  superuser=off
+admin alias   : user=mateassist      superuser=on
+same underlying connection object: False
+rows written on default, visible to admin: 0
+```
+
+The real cause was ordinary transaction isolation: a separate connection cannot
+see the test's uncommitted writes. That makes the tests entirely writable with
+`transaction=True`, which is what Phase 7B did — see `test_platform_rollups.py`.
+The documented "limitation" was a wrong explanation that would have discouraged
+anyone from trying.
+
+Worth recording as a method point: the fix came from *probing* the two
+connections rather than reasoning about Django's MIRROR semantics from memory.
 
 **The running server was serving stale routes.** All 21 live checks returned 404
 while `/auth/login/` returned 200 — the process predated the new URLs. Restarted

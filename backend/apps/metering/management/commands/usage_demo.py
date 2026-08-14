@@ -5,14 +5,13 @@
 Runs the reporting layer against the real database, with the real two roles, on
 committed data - which is the only environment where it can be proven at all.
 
-**Why this command exists rather than a test.** In test settings the `admin`
-alias is a MIRROR of `default`, so both share the NOSUPERUSER app connection and
-the RLS bypass that platform reporting depends on is simply absent. A unit test
-asserting "the platform rollup sees every workspace" cannot be written; it would
-either read zero or, if MIRROR were removed, read zero for a different reason.
-So the claim is verified here instead, the same way Phases 4-6 verified theirs
-(A-006): four separate bugs in this project were invisible to a green suite and
-only appeared when something was actually run.
+**Why this command exists alongside the tests.** `test_platform_rollups.py`
+covers cross-tenant aggregation with committed data and both real roles, so the
+claim is no longer test-less. What this command adds is the thing a test suite
+cannot give: the same code exercised against the *development* database, with
+whatever real traffic and prices happen to be in it, before anyone trusts a
+dashboard rendered from it. Phases 4-6 each shipped a bug that a green suite did
+not see (A-006), and every one surfaced the moment something was actually run.
 
 The assertions are the point. A demo that prints numbers proves nothing - a
 wrong number on a billing screen is worse than an exception, because nobody

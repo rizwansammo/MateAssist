@@ -8,6 +8,7 @@ that can observe more than one workspace, so it lives in one module rather than
 being spread across the apps it reports on.
 """
 
+from django.db.models import Count
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status, viewsets
@@ -20,9 +21,15 @@ from apps.audit.models import AuditEvent, Level, record
 from apps.metering import rollups
 from apps.metering.models import TenantBudget
 from apps.metering.serializers import AuditEventSerializer, TenantBudgetSerializer
+from apps.tenancy.models import Tenant
 
 from .permissions import IsPlatformOwner
-from .serializers import ModelPriceSerializer, ProviderKeySerializer, ProviderKeyWriteSerializer
+from .serializers import (
+    ModelPriceSerializer,
+    ProviderKeySerializer,
+    ProviderKeyWriteSerializer,
+    TenantSerializer,
+)
 
 
 def _client_ip(request):
@@ -180,6 +187,60 @@ class ModelPriceViewSet(viewsets.ModelViewSet):
     queryset = ModelPrice.objects.all()
     serializer_class = ModelPriceSerializer
     permission_classes = [IsPlatformOwner]
+
+
+class TenantViewSet(viewsets.ModelViewSet):
+    """The workspace registry (D-020).
+
+    `Tenant` is not itself RLS-protected - it is the registry, not tenant data -
+    but the *counts* are: memberships and documents are tenant-owned, so
+    annotating them requires the platform connection. On `default` with no tenant
+    armed every count would come back zero, which is the same silent-wrong-number
+    failure that `month_to_date_cost` had.
+    """
+
+    serializer_class = TenantSerializer
+    permission_classes = [IsPlatformOwner]
+    http_method_names = ["get", "post", "patch"]  # suspension is an explicit action
+
+    def get_queryset(self):
+        # Annotation names must not collide with the reverse accessors they
+        # count. `TenantScopedModel` sets related_name="%(class)ss", so Document
+        # already occupies `documents` on Tenant, and annotating over it raises
+        # at query-build time - a 500 on every request to this endpoint.
+        return (
+            Tenant.objects.using(rollups.PLATFORM_ALIAS)
+            .annotate(
+                user_count=Count("memberships", distinct=True),
+                document_count=Count("documents", distinct=True),
+            )
+            .order_by("name")
+        )
+
+    @extend_schema(responses={200: TenantSerializer})
+    @action(detail=True, methods=["post"])
+    def suspend(self, request, pk=None):
+        """Blocks sign-in and pauses AI routing for the workspace."""
+        return self._set_status(request, Tenant.Status.SUSPENDED, "tenant.suspend", Level.WARN)
+
+    @extend_schema(responses={200: TenantSerializer})
+    @action(detail=True, methods=["post"])
+    def activate(self, request, pk=None):
+        return self._set_status(request, Tenant.Status.ACTIVE, "tenant.activate", Level.INFO)
+
+    def _set_status(self, request, status_value, action_name, level):
+        tenant = self.get_object()
+        tenant.status = status_value
+        tenant.save(using=rollups.PLATFORM_ALIAS, update_fields=["status"])
+        record(
+            action_name,
+            actor=request.user,
+            level=level,
+            target=tenant.name,
+            ip=_client_ip(request),
+            slug=tenant.slug,
+        )
+        return Response(self.get_serializer(tenant).data)
 
 
 # ------------------------------------------------- cross-tenant reporting ----

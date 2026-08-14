@@ -10,7 +10,7 @@ import {
   ENGINE_ASSIGNMENT,
   KEY_STATUS_LABEL,
   KEY_STATUS_TONE
-} from "../seed/engines.js";
+} from "../lib/engines.js";
 
 /**
  * AI Configuration - two dedicated sections (D-092), now backed by the live

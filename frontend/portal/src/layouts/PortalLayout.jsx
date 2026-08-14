@@ -1,18 +1,50 @@
-import { Bot, BookOpen, Bell, ChevronDown, LayoutDashboard, Search, Ticket } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Bot, BookOpen, Bell, ChevronDown, LayoutDashboard, Search } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Toast, Wordmark } from "@mateassist/ui";
 
 import { useAuth } from "../context/AuthContext.jsx";
 import { PortalProvider, usePortal } from "../context/PortalContext.jsx";
+import { api } from "../lib/api.js";
 
+// "My Tickets" is gone with A-008: there is no ticket table, and a nav item
+// pointing at invented rows is worse than one fewer link.
 const NAV = [
   { to: "/app", end: true, label: "Dashboard", icon: LayoutDashboard, crumb: "Dashboard" },
   { to: "/app/chat", label: "AI Support", icon: Bot, badge: "LIVE", crumb: "AI Support" },
-  { to: "/app/tickets", label: "My Tickets", icon: Ticket, counter: "open", crumb: "My Tickets" },
   { to: "/app/knowledge", label: "Knowledge Base", icon: BookOpen, crumb: "Knowledge Base" }
 ];
 
-function Sidebar({ openCount, tenant }) {
+const HEALTH_STATE = {
+  ok: { label: "All systems operational", dot: "bg-emerald-500", text: "text-emerald-400" },
+  degraded: { label: "Degraded performance", dot: "bg-amber-500", text: "text-amber-400" },
+  error: { label: "Service disruption", dot: "bg-red-500", text: "text-red-400" },
+  unknown: { label: "Status unavailable", dot: "bg-slate-500", text: "text-slate-400" }
+};
+
+function Sidebar({ tenant }) {
+  // D-089: the prototype asserted "All systems operational" unconditionally,
+  // which is a claim the UI is in no position to make. This reads the real
+  // aggregate, and says "unavailable" rather than "fine" when it cannot.
+  const [status, setStatus] = useState("unknown");
+
+  useEffect(() => {
+    let live = true;
+    const poll = () =>
+      api
+        .health()
+        .then((payload) => live && setStatus(payload?.status ?? "unknown"))
+        .catch(() => live && setStatus("unknown"));
+
+    poll();
+    const timer = setInterval(poll, 60_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const health = HEALTH_STATE[status] ?? HEALTH_STATE.unknown;
   return (
     <aside className="sticky top-0 hidden h-screen flex-col bg-ink lg:flex">
       <div className="border-b border-slate-800 px-5 py-4">
@@ -63,24 +95,18 @@ function Sidebar({ openCount, tenant }) {
                   {item.badge}
                 </span>
               )}
-              {item.counter === "open" && (
-                <span className="ml-auto font-mono text-[11px] text-slate-500">{openCount}</span>
-              )}
             </NavLink>
           );
         })}
       </nav>
 
       <div className="mt-auto px-3.5 pb-4 pt-4">
-        {/*
-          Driven by the real /api/v1/health aggregate from Phase 7 (D-089). The
-          prototype's hardcoded "Last incident 14 days ago" is gone: there is no
-          incident model, and inventing one in the UI would be a fabricated fact.
-        */}
         <div className="rounded-none border border-slate-800 bg-ink2 p-3.5">
-          <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-400">
-            <span className="h-[7px] w-[7px] rounded-none bg-emerald-500" />
-            All systems operational
+          <div
+            className={`flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] ${health.text}`}
+          >
+            <span className={`h-[7px] w-[7px] rounded-none ${health.dot}`} />
+            {health.label}
           </div>
         </div>
       </div>
@@ -109,7 +135,7 @@ function Header({ crumb, tenant, user, onSignOut }) {
           className="hidden w-60 items-center gap-2.5 rounded-none border border-hairline bg-slate-50 px-3 py-2 xl:flex"
         >
           <Search size={15} className="text-slate-400" />
-          <span className="text-[13px] text-slate-400">Search tickets &amp; docs</span>
+          <span className="text-[13px] text-slate-400">Search runbooks</span>
         </button>
         <button
           type="button"
@@ -143,7 +169,7 @@ function Header({ crumb, tenant, user, onSignOut }) {
 }
 
 function PortalShell() {
-  const { counts, toast, dismissToast } = usePortal();
+  const { toast, dismissToast } = usePortal();
   const { tenant, user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -160,7 +186,7 @@ function PortalShell() {
 
   return (
     <div className="grid min-h-screen grid-cols-1 bg-slate-100 lg:grid-cols-[260px_1fr]">
-      <Sidebar openCount={counts.Open + counts.Pending} tenant={tenant} />
+      <Sidebar tenant={tenant} />
 
       <div className="flex min-w-0 flex-col">
         <Header
