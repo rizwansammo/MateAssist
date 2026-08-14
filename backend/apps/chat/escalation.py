@@ -1,7 +1,7 @@
 """Escalation by email (A-008, D-124 to D-129).
 
 MateAssist stores no tickets. When the agent cannot resolve an issue it compiles
-the transcript, the retrieved citations and any image descriptions, and emails
+the transcript and any image descriptions, and emails
 them to the workspace's existing helpdesk.
 
 The model never sends anything. It proposes; the authenticated user confirms.
@@ -33,9 +33,6 @@ RAISED      {timestamp}
 --- SUMMARY -------------------------------------------------------------
 {summary}
 
---- WHAT THE ASSISTANT CONSULTED ----------------------------------------
-{citations}
-
 --- TRANSCRIPT ----------------------------------------------------------
 {transcript}
 
@@ -57,18 +54,14 @@ def _render_transcript(messages) -> str:
     return "\n\n".join(lines) or "(no transcript)"
 
 
-def _render_citations(messages) -> str:
-    seen, lines = set(), []
-    for message in messages:
-        for citation in message.citations or []:
-            key = (citation.get("title"), citation.get("page"))
-            if key in seen:
-                continue
-            seen.add(key)
-            page = f", page {citation['page']}" if citation.get("page") else ""
-            figure = " (from a figure)" if citation.get("from_image") else ""
-            lines.append(f"  - {citation.get('title', 'Unknown document')}{page}{figure}")
-    return "\n".join(lines) or "  (no runbook passages matched)"
+# The email used to carry a "WHAT THE ASSISTANT CONSULTED" block listing the
+# runbooks behind each answer. D-141 removed it: the engineer receiving an
+# escalation maintains those runbooks and does not need their titles recited,
+# and the transcript already shows what the assistant actually said - which is
+# the part they act on.
+#
+# Citations are still stored on every message, so a platform admin can still
+# answer "which document produced this?" when an answer turns out to be wrong.
 
 
 def resolve_recipient(tenant) -> str:
@@ -114,7 +107,6 @@ def send_escalation(*, tenant, user, conversation, proposal: dict) -> dict:
         category=proposal.get("category") or "Other",
         timestamp=timezone.now().strftime("%Y-%m-%d %H:%M UTC"),
         summary=proposal.get("summary") or "(no summary provided)",
-        citations=_render_citations(messages),
         transcript=_render_transcript(messages),
     )
 

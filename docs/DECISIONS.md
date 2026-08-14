@@ -794,3 +794,91 @@ where a model name appears.
 
 Also corrected: the text adapter reported `"DeepSeek call failed"` for a Gemini
 call. The one place naming a vendor named the wrong one.
+
+---
+
+## A-014 — Phase 8: the assistant is the interface
+
+**Status: accepted, 2026-08-15.** Adds D-138 to D-143.
+
+### D-138 — relevance gating, two levels
+
+Saying "Hi" produced a reply captioned **Sources: VPN Runbook (demo)**. The
+greeting did not come from the runbook, and a citation that appears on
+everything stops being evidence.
+
+The fused RRF score could not be thresholded: it ranks, so the top hit always
+scores `1/(60+1)` whether the match is perfect or nonsense. Gating on it would
+have compiled, run, and done nothing. The real cosine similarity is now carried
+alongside it.
+
+**Measured, not chosen.** `manage.py retrieval_probe` scored ten greetings and
+ten support requests against the corpus: small talk 0.452–0.524, real questions
+0.557–0.743. GROUND sits at 0.53, CITE at 0.54.
+
+Two levels because the mistakes cost differently: below GROUND the model never
+sees the runbook, which risks a wrong answer; below CITE the answer is
+unchanged and only the chip disappears. A borderline question keeps grounding.
+
+A chunk found only by full-text search gets a relevance floor. `0x80070035`
+embeds poorly but FTS matches it exactly, and scoring that zero would discard
+the strongest evidence available — the case hybrid retrieval exists for.
+
+**The gap narrows as the corpus grows** — 0.055 with one document, 0.033 with
+five. Re-run the probe after significant uploads; if the ranges ever overlap, a
+fixed threshold is the wrong mechanism.
+
+### D-139 — document focus
+
+Retrieval returns the best *chunks*, not the best *document*. With two VPN
+runbooks indexed, "my VPN won't connect" interleaves both, and a model handed
+that material writes one coherent procedure out of two incompatible ones. Every
+step true; the combination fiction.
+
+The losing document's passages are dropped before the prompt is assembled, so
+blending is impossible rather than discouraged. A document is scored by its best
+passage, not its passage count, so a long runbook mentioning the topic in
+passing cannot outvote a short one that answers it.
+
+Within `RETRIEVAL_FOCUS_MARGIN` the question is genuinely ambiguous; both are
+kept and the prompt states they are different systems whose steps must not be
+merged. Discarding one on a coin-flip would drop the right answer half the time.
+
+`seed_runbooks` exists because this was unobservable with one document.
+
+### D-140 — the runbook surface is administrator-only
+
+`IsTenantAdmin` exempted GET. The browsable list was the visible half; the half
+that mattered was `/knowledge/documents/{id}/chunks/`, which returned the full
+text of every runbook to any authenticated member. Hiding the menu item would
+have changed nothing.
+
+IT runbooks carry admin console paths, service account names, and
+identity-verification procedures that stop working once the person being
+verified has read them. **Retrieval is unaffected** — the assistant still
+answers from everything. What is removed is browsing, which is the assistant's
+job.
+
+### D-141 — citations are stored, not displayed
+
+Source chips, the runbook rail, and the escalation email's "WHAT THE ASSISTANT
+CONSULTED" block are gone. They named internal documents to readers who cannot
+open them, and pointed at a page that is now administrator-only.
+
+The citations remain on every message. They cost nothing invisible and are the
+only way to answer *"which document produced this?"* when an answer is wrong —
+which D-139's failure mode makes a real question as the corpus grows.
+
+### D-142 — the open conversation lives in the URL
+
+`conversationId` was component state, so a refresh started a new thread and
+orphaned the old one. The conversations were always persisted; there was no way
+back. `/app/chat/:id` restores on load, a sidebar lists threads, and the list
+endpoint returns titles and counts rather than every message of every thread.
+
+### D-143 — the thinking label states the actual phase
+
+"Searching your runbooks..." was shown for the whole wait. Retrieval takes about
+50ms and the answer takes seconds, so the label was untrue for almost all of it.
+The SSE `start` event already marks the boundary: "Looking this up..." before
+it, "Writing your answer..." after.

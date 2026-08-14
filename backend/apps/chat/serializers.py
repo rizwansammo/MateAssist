@@ -38,6 +38,31 @@ class ConversationSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class ConversationListSerializer(serializers.ModelSerializer):
+    """The sidebar shape - deliberately without `messages`.
+
+    The list is loaded on every visit to the chat page. Nesting every message of
+    every conversation would send an entire history to render a list of titles,
+    and it grows without bound as a user keeps talking. The detail endpoint
+    already returns the full thread when one is opened.
+    """
+
+    message_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Conversation
+        fields = (
+            "id",
+            "title",
+            "resolved",
+            "escalated_at",
+            "created_at",
+            "updated_at",
+            "message_count",
+        )
+        read_only_fields = fields
+
+
 class SendMessageSerializer(serializers.Serializer):
     text = serializers.CharField(allow_blank=True, trim_whitespace=True)
     image = serializers.ImageField(required=False, allow_null=True)

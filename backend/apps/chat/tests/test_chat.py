@@ -169,7 +169,7 @@ def conversation(db):
     return tenant, convo
 
 
-def test_escalation_email_carries_transcript_and_citations(conversation):
+def test_escalation_email_carries_the_transcript(conversation):
     tenant, convo = conversation
     mail.outbox.clear()
 
@@ -191,8 +191,13 @@ def test_escalation_email_carries_transcript_and_citations(conversation):
     assert message.to == ["helpdesk@alpha.test"]
     assert "Laptop will not boot" in message.subject
     assert "My laptop will not boot." in message.body  # transcript
-    assert "Hardware Runbook" in message.body  # what was consulted
     assert "Needs hardware support." in message.body  # summary
+
+    # D-141: the "WHAT THE ASSISTANT CONSULTED" block is gone. The engineer
+    # receiving this maintains those runbooks and does not need their titles
+    # recited; the transcript already shows what the assistant said.
+    assert "Hardware Runbook" not in message.body
+    assert "CONSULTED" not in message.body
 
 
 def test_escalation_goes_to_the_tenants_own_address(conversation):

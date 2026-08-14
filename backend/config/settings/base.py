@@ -254,6 +254,40 @@ CHUNK_OVERLAP_RATIO = env.float("CHUNK_OVERLAP_RATIO", default=0.15)
 RETRIEVAL_TOP_K = env.int("RETRIEVAL_TOP_K", default=20)
 RETRIEVAL_RRF_K = env.int("RETRIEVAL_RRF_K", default=60)
 RETRIEVAL_TOP_N = env.int("RETRIEVAL_TOP_N", default=6)
+
+# Relevance gating (D-138). Two levels, not one.
+#
+# MEASURED, not chosen. `manage.py retrieval_probe` scored ten greetings and ten
+# support requests against the five-document corpus:
+#
+#     small talk     0.452 .. 0.524   (median 0.495)
+#     real questions 0.557 .. 0.743   (median 0.706)
+#
+# CITE sits at the midpoint of that gap; GROUND sits just above the small-talk
+# ceiling. GROUND is the looser of the two on purpose: a wrong guess there costs
+# the user a correct answer, while a wrong guess at CITE costs a chip on screen.
+#
+# **The gap narrows as the corpus grows** - it was 0.055 with one document and
+# 0.033 with five, because more chunks means more chance that something sits
+# coincidentally close to a greeting. This is the number to watch. Re-run
+# `retrieval_probe` after any significant upload, and if the ranges ever overlap,
+# a fixed threshold is no longer the right mechanism.
+RETRIEVAL_GROUND_MIN = env.float("RETRIEVAL_GROUND_MIN", default=0.53)
+RETRIEVAL_CITE_MIN = env.float("RETRIEVAL_CITE_MIN", default=0.54)
+
+# Document focus (D-139). How far ahead the best-matching document must be
+# before the others are dropped entirely.
+#
+# Retrieval returns the best CHUNKS, not the best document, so a VPN question
+# can pull passages from two different VPN runbooks at once - and a model asked
+# to answer from that material will write one tidy procedure out of two
+# incompatible ones. Every step true, the combination fiction.
+#
+# Above this margin the runner-up is discarded before the model sees it, so
+# blending is impossible rather than discouraged. Below it the question is
+# genuinely ambiguous, both documents are kept, and the prompt tells the model
+# they are separate sources that must not be merged.
+RETRIEVAL_FOCUS_MARGIN = env.float("RETRIEVAL_FOCUS_MARGIN", default=0.04)
 HNSW_M = env.int("HNSW_M", default=16)
 HNSW_EF_CONSTRUCTION = env.int("HNSW_EF_CONSTRUCTION", default=64)
 

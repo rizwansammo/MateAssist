@@ -13,6 +13,7 @@ export const chatApi = {
   listConversations: () => apiFetch("/chat/conversations/"),
   getConversation: (id) => apiFetch(`/chat/conversations/${id}/`),
   createConversation: () => apiFetch("/chat/conversations/", { method: "POST", body: {} }),
+  remove: (id) => apiFetch(`/chat/conversations/${id}/`, { method: "DELETE" }),
 
   send: (id, { text, image }) => {
     const form = new FormData();

@@ -9,10 +9,22 @@ import { api } from "../lib/api.js";
 
 // "My Tickets" is gone with A-008: there is no ticket table, and a nav item
 // pointing at invented rows is worse than one fewer link.
+//
+// Knowledge Base is administrator-only (D-140). Runbooks are written for IT and
+// carry admin console paths, service account names and identity-verification
+// procedures that stop working once the person being verified has read them. An
+// end user reaches that content through the assistant, which is the point of
+// the assistant.
 const NAV = [
   { to: "/app", end: true, label: "Dashboard", icon: LayoutDashboard, crumb: "Dashboard" },
   { to: "/app/chat", label: "AI Support", icon: Bot, badge: "LIVE", crumb: "AI Support" },
-  { to: "/app/knowledge", label: "Knowledge Base", icon: BookOpen, crumb: "Knowledge Base" }
+  {
+    to: "/app/knowledge",
+    label: "Knowledge Base",
+    icon: BookOpen,
+    crumb: "Knowledge Base",
+    adminOnly: true
+  }
 ];
 
 const HEALTH_STATE = {
@@ -22,7 +34,7 @@ const HEALTH_STATE = {
   unknown: { label: "Status unavailable", dot: "bg-slate-500", text: "text-slate-400" }
 };
 
-function Sidebar({ tenant }) {
+function Sidebar({ tenant, isAdmin }) {
   // D-089: the prototype asserted "All systems operational" unconditionally,
   // which is a claim the UI is in no position to make. This reads the real
   // aggregate, and says "unavailable" rather than "fine" when it cannot.
@@ -73,7 +85,7 @@ function Sidebar({ tenant }) {
         Menu
       </div>
       <nav className="flex flex-col gap-0.5 px-3.5">
-        {NAV.map((item) => {
+        {NAV.filter((item) => isAdmin || !item.adminOnly).map((item) => {
           const Icon = item.icon;
           return (
             <NavLink
@@ -129,13 +141,15 @@ function Header({ crumb, tenant, user, onSignOut }) {
       </div>
 
       <div className="ml-auto flex flex-none items-center gap-2.5">
+        {/* Points at the assistant, not the runbook list: an end user has no
+            access to that page (D-140), and the assistant IS the search. */}
         <button
           type="button"
-          onClick={() => navigate("/app/knowledge")}
+          onClick={() => navigate("/app/chat")}
           className="hidden w-60 items-center gap-2.5 rounded-none border border-hairline bg-slate-50 px-3 py-2 xl:flex"
         >
           <Search size={15} className="text-slate-400" />
-          <span className="text-[13px] text-slate-400">Search runbooks</span>
+          <span className="text-[13px] text-slate-400">Ask about an IT issue</span>
         </button>
         <button
           type="button"
@@ -170,7 +184,8 @@ function Header({ crumb, tenant, user, onSignOut }) {
 
 function PortalShell() {
   const { toast, dismissToast } = usePortal();
-  const { tenant, user, logout } = useAuth();
+  const { tenant, user, role, logout } = useAuth();
+  const isAdmin = role === "TENANT_ADMIN";
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -186,7 +201,7 @@ function PortalShell() {
 
   return (
     <div className="grid min-h-screen grid-cols-1 bg-slate-100 lg:grid-cols-[260px_1fr]">
-      <Sidebar tenant={tenant} />
+      <Sidebar tenant={tenant} isAdmin={isAdmin} />
 
       <div className="flex min-w-0 flex-col">
         <Header

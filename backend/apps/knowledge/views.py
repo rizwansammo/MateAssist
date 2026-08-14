@@ -40,13 +40,29 @@ MAGIC = {
 
 
 class IsTenantAdmin(BasePermission):
-    message = "Only a workspace administrator can manage runbooks."
+    """Workspace administrators only - reads included (D-140).
+
+    This used to exempt GET, on the reasoning that runbooks are for everyone.
+    That was wrong, and not only for the browsable list: it made
+    `/knowledge/documents/{id}/chunks/` readable by any authenticated member, so
+    every end user could pull the full text of every runbook through the API
+    whether or not a menu item existed.
+
+    IT runbooks are written for IT. They routinely carry admin console paths,
+    service account names, network topology, and "verify identity by calling the
+    number on record" instructions that stop working once the person being
+    verified has read them.
+
+    The assistant still retrieves from all of it - that is the product. What is
+    removed is *browsing*: the answer reaches the user through the assistant,
+    which is the point of the assistant.
+    """
+
+    message = "Only a workspace administrator can access runbooks directly."
 
     def has_permission(self, request, view) -> bool:
-        if request.method in ("GET", "HEAD", "OPTIONS"):
-            return bool(request.user and request.user.is_authenticated)
         tenant = getattr(request, "tenant", None)
-        if tenant is None or not request.user.is_authenticated:
+        if tenant is None or not request.user or not request.user.is_authenticated:
             return False
         return Membership.all_objects.filter(
             user=request.user, tenant=tenant, role=Role.TENANT_ADMIN

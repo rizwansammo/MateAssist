@@ -1,11 +1,9 @@
-import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowRight, BookOpen, Bot } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Metric, Pill, QuickAction } from "@mateassist/ui";
 
 import { useAuth } from "../context/AuthContext.jsx";
 import { usePortal } from "../context/PortalContext.jsx";
-import { knowledgeApi } from "../lib/knowledge.js";
 
 function greeting(hour) {
   if (hour < 12) return "Good morning";
@@ -32,28 +30,11 @@ function when(iso) {
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { conversations, counts, loading, error, refresh } = usePortal();
-  const { user } = useAuth();
+  const { user, role } = useAuth();
+  const isAdmin = role === "TENANT_ADMIN";
   const firstName = (user?.display_name ?? "").split(" ")[0] || "there";
 
   const now = new Date();
-  const [documents, setDocuments] = useState(null);
-
-  useEffect(() => {
-    let live = true;
-    knowledgeApi
-      .listDocuments()
-      .then((payload) => {
-        if (!live) return;
-        const rows = Array.isArray(payload) ? payload : (payload?.results ?? []);
-        setDocuments(payload?.count ?? rows.length);
-      })
-      .catch(() => {
-        if (live) setDocuments(null);
-      });
-    return () => {
-      live = false;
-    };
-  }, []);
 
   return (
     <main className="flex flex-col gap-7 px-7 pb-12 pt-8">
@@ -111,10 +92,17 @@ export default function DashboardPage() {
           value={loading ? "--" : counts.all}
           note="Across this workspace account"
         />
+        {/*
+          Was "Runbooks available", counted by calling the knowledge API. That
+          endpoint is administrator-only now (D-140), so for an end user the tile
+          would have shown "--" forever after a failed request. Replaced with a
+          figure they own.
+        */}
         <Metric
-          label="Runbooks available"
-          value={documents ?? "--"}
-          note="Maintained by your IT team"
+          label="Resolved"
+          value={loading ? "--" : counts.resolved}
+          note="Closed without needing a human"
+          noteClass={counts.resolved ? "text-emerald-700" : "text-slate-400"}
         />
       </div>
 
@@ -139,14 +127,18 @@ export default function DashboardPage() {
             title="Report an issue"
             body="Paste a screenshot. The assistant reads it and answers from your runbooks."
           />
-          <QuickAction
-            onClick={() => navigate("/app/knowledge")}
-            accent="border-t-[3px] border-t-amber-600 text-amber-600"
-            tint="border-amber-200 bg-amber-50"
-            icon={<BookOpen size={19} strokeWidth={1.8} className="text-amber-700" />}
-            title="Browse docs"
-            body="Runbooks maintained by your IT team."
-          />
+          {/* Administrators only (D-140): an end user bounced off this route
+              would be a dead card. They reach the runbooks by asking. */}
+          {isAdmin && (
+            <QuickAction
+              onClick={() => navigate("/app/knowledge")}
+              accent="border-t-[3px] border-t-amber-600 text-amber-600"
+              tint="border-amber-200 bg-amber-50"
+              icon={<BookOpen size={19} strokeWidth={1.8} className="text-amber-700" />}
+              title="Manage runbooks"
+              body="Upload and re-index the documents the assistant answers from."
+            />
+          )}
         </div>
       </div>
 
@@ -219,7 +211,11 @@ export default function DashboardPage() {
                 {conversations.slice(0, 5).map((conversation) => {
                   const badge = state(conversation);
                   return (
-                    <tr key={conversation.id}>
+                    <tr
+                      key={conversation.id}
+                      onClick={() => navigate(`/app/chat/${conversation.id}`)}
+                      className="cursor-pointer transition hover:bg-slate-50"
+                    >
                       <td className="border-b border-slate-100 px-6 py-4 text-[13.5px] text-ink">
                         {conversation.title || "Untitled request"}
                       </td>

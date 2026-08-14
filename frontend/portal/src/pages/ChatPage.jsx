@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, BookOpen, Bot, Check, Mail } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { AlertTriangle, Bot, Check, Mail, MessageSquare, Plus, Trash2 } from "lucide-react";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { ChatComposer } from "../components/ChatComposer.jsx";
 import { usePortal } from "../context/PortalContext.jsx";
@@ -9,30 +9,81 @@ import { chatApi } from "../lib/chat.js";
 /**
  * AI Support - live (Phase 6).
  *
- * D-080 still holds: there is no Device/OS/Location/Entra panel. The right-hand
- * column survives with the two things that became real - citations from actual
- * retrieval, and feedback that is persisted.
+ * D-080 still holds: there is no Device/OS/Location/Entra panel. D-141 removed
+ * the right-hand runbook rail and the per-message source chips - they named
+ * internal documents the reader cannot open, and pointed at a Knowledge Base
+ * that is now administrator-only. The chat is the whole surface.
+ *
+ * Citations are still stored on every message and still reach the platform
+ * admin, so a wrong answer remains explainable. Only the display is gone.
  *
  * A-008: the action button escalates by email rather than creating a ticket.
  * The model proposes; this button is the user's confirmation (D-126).
+ *
+ * D-142: the open thread lives in the URL, not in component state. Before this,
+ * `conversationId` reset to null on every mount - so a refresh, a back button or
+ * a stray navigation silently started a new thread and orphaned the old one.
+ * The conversations were never lost; there was simply no way back to them.
  */
 export default function ChatPage() {
-  const navigate = useNavigate();
   const { notify } = usePortal();
+  const navigate = useNavigate();
+  const { conversationId: routeId } = useParams();
+  const conversationId = routeId ? Number(routeId) : null;
 
-  const [conversationId, setConversationId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
-  const [citations, setCitations] = useState([]);
+  // "searching" until the server signals that retrieval finished, then
+  // "writing" (D-143). Retrieval takes about 50ms and the answer takes seconds,
+  // so a single "Searching your runbooks..." label was untrue for almost the
+  // entire wait.
+  const [phase, setPhase] = useState(null);
+  const [threads, setThreads] = useState([]);
+  const [loadingThread, setLoadingThread] = useState(false);
   const bottomRef = useRef(null);
 
-  const ensureConversation = useCallback(async () => {
-    if (conversationId) return conversationId;
-    const created = await chatApi.createConversation();
-    setConversationId(created.id);
-    return created.id;
-  }, [conversationId]);
+  const loadThreads = useCallback(async () => {
+    try {
+      const payload = await chatApi.listConversations();
+      setThreads(Array.isArray(payload) ? payload : (payload?.results ?? []));
+    } catch {
+      // The sidebar is navigation, not content. A failed poll must not replace
+      // the conversation the user is reading with an error page.
+      setThreads([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadThreads();
+  }, [loadThreads]);
+
+  // Open whatever the URL points at, including on a cold load or a refresh.
+  useEffect(() => {
+    let live = true;
+    if (!conversationId) {
+      setMessages([]);
+      return undefined;
+    }
+    setLoadingThread(true);
+    chatApi
+      .getConversation(conversationId)
+      .then((conversation) => {
+        if (live) setMessages(conversation.messages ?? []);
+      })
+      .catch(() => {
+        if (!live) return;
+        // A deleted or foreign id must not strand the user on a blank page.
+        notify("That conversation is no longer available", "Starting a new one.", "warn");
+        navigate("/app/chat", { replace: true });
+      })
+      .finally(() => {
+        if (live) setLoadingThread(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [conversationId, navigate, notify]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -41,16 +92,24 @@ export default function ChatPage() {
   const send = async ({ text, image }) => {
     setBusy(true);
     setStreaming("");
+    setPhase("searching");
     const optimistic = { id: `local-${Date.now()}`, role: "user", text, pending: Boolean(image) };
     setMessages((prev) => [...prev, optimistic]);
 
     try {
-      const id = await ensureConversation();
-      let collected = "";
+      // A conversation created here is navigated to, so the URL matches the
+      // thread from the first message rather than after a reload.
+      let id = conversationId;
+      if (!id) {
+        const created = await chatApi.createConversation();
+        id = created.id;
+        navigate(`/app/chat/${id}`, { replace: true });
+      }
 
+      let collected = "";
       await chatApi.stream(id, { text, image }, (event, data) => {
         if (event === "start") {
-          setCitations(data.citations ?? []);
+          setPhase("writing");
         } else if (event === "delta") {
           collected += data.text;
           setStreaming(collected);
@@ -60,16 +119,30 @@ export default function ChatPage() {
       });
 
       // Reload from the server rather than trusting the accumulated text: the
-      // persisted message carries citations, the escalation proposal and the
-      // real ids that feedback and escalation need.
+      // persisted message carries the escalation proposal and the real ids that
+      // feedback and escalation need.
       const conversation = await chatApi.getConversation(id);
       setMessages(conversation.messages ?? []);
       setStreaming("");
+      loadThreads(); // the title and timestamp have just changed
     } catch (error) {
       notify("Message failed", error.message, "warn");
       setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
     } finally {
       setBusy(false);
+      setPhase(null);
+    }
+  };
+
+  const removeThread = async (id, event) => {
+    event.stopPropagation();
+    if (!window.confirm("Delete this conversation? This cannot be undone.")) return;
+    try {
+      await chatApi.remove(id);
+      setThreads((prev) => prev.filter((t) => t.id !== id));
+      if (id === conversationId) navigate("/app/chat", { replace: true });
+    } catch (error) {
+      notify("Could not delete", error.message, "warn");
     }
   };
 
@@ -98,15 +171,79 @@ export default function ChatPage() {
   };
 
   const newChat = () => {
-    setConversationId(null);
     setMessages([]);
     setStreaming("");
-    setCitations([]);
+    navigate("/app/chat");
   };
 
   return (
-    <main className="grid min-h-[calc(100vh-66px)] grid-cols-1 xl:grid-cols-[1fr_300px]">
-      <section className="flex min-w-0 flex-col border-r border-hairline bg-white">
+    <main className="grid min-h-[calc(100vh-66px)] grid-cols-1 xl:grid-cols-[260px_1fr]">
+      <aside className="hidden flex-col border-r border-hairline bg-white xl:flex">
+        <div className="sticky top-[66px] z-10 border-b border-hairline bg-white px-4 py-4">
+          <button
+            type="button"
+            onClick={newChat}
+            className="flex w-full items-center justify-center gap-2 rounded-none bg-emerald-600 px-3.5 py-2.5 text-[13px] font-semibold text-white transition hover:bg-emerald-700"
+          >
+            <Plus size={15} strokeWidth={2} />
+            New chat
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-px overflow-y-auto px-4 py-4">
+          <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+            Your conversations
+          </div>
+          {threads.length === 0 ? (
+            <p className="text-[12.5px] leading-relaxed text-slate-400">
+              Nothing yet. Ask a question and it will be saved here.
+            </p>
+          ) : (
+            threads.map((thread) => {
+              const active = thread.id === conversationId;
+              return (
+                <button
+                  key={thread.id}
+                  type="button"
+                  onClick={() => navigate(`/app/chat/${thread.id}`)}
+                  className={`group flex items-start gap-2.5 rounded-none border-l-2 px-3 py-2.5 text-left transition ${
+                    active
+                      ? "border-emerald-500 bg-slate-50"
+                      : "border-transparent hover:bg-slate-50"
+                  }`}
+                >
+                  <MessageSquare
+                    size={14}
+                    strokeWidth={1.8}
+                    className="mt-0.5 flex-none text-slate-400"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] text-ink">
+                      {thread.title || "New conversation"}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-slate-400">
+                      {thread.escalated_at
+                        ? "Sent to IT"
+                        : `${thread.message_count} message${thread.message_count === 1 ? "" : "s"}`}
+                    </span>
+                  </span>
+                  <span
+                    role="button"
+                    tabIndex={-1}
+                    aria-label="Delete conversation"
+                    onClick={(event) => removeThread(thread.id, event)}
+                    className="flex-none p-1 text-slate-300 opacity-0 transition hover:text-red-600 group-hover:opacity-100"
+                  >
+                    <Trash2 size={13} strokeWidth={1.8} />
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </aside>
+
+      <section className="flex min-w-0 flex-col bg-white">
         <div className="sticky top-[66px] z-10 flex items-center gap-3 border-b border-hairline bg-white px-6 py-4">
           <div className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-none bg-ink">
             <Bot size={18} strokeWidth={1.8} className="text-emerald-400" />
@@ -125,24 +262,32 @@ export default function ChatPage() {
               Answers grounded in your workspace runbooks
             </div>
           </div>
+          {/* The sidebar owns "New chat" on wide screens; this is the
+              small-screen equivalent, where the sidebar is hidden. */}
           <button
             type="button"
             onClick={newChat}
-            className="ml-auto flex-none whitespace-nowrap rounded-none border border-slate-300 bg-white px-3.5 py-2 text-[12.5px] font-medium text-slate-700 transition hover:bg-slate-50"
+            className="ml-auto flex-none whitespace-nowrap rounded-none border border-slate-300 bg-white px-3.5 py-2 text-[12.5px] font-medium text-slate-700 transition hover:bg-slate-50 xl:hidden"
           >
             New chat
           </button>
         </div>
 
         <div className="flex flex-1 flex-col gap-6 bg-[#FCFDFE] px-6 pb-5 pt-7">
-          {messages.length === 0 && !streaming && (
+          {loadingThread && messages.length === 0 && (
+            <div className="mx-auto py-10 text-[13px] text-slate-400" role="status">
+              Opening conversation...
+            </div>
+          )}
+
+          {!loadingThread && messages.length === 0 && !streaming && (
             <div className="mx-auto max-w-[520px] py-10 text-center">
               <div className="text-[15px] font-semibold text-ink">
                 Ask about anything IT
               </div>
               <p className="mt-2 text-[13.5px] leading-relaxed text-slate-500">
-                MateAssist answers from your team&apos;s runbooks and cites the document it used.
-                Paste a screenshot of an error and it will read that too.
+                MateAssist answers from your team&apos;s runbooks. Paste a screenshot of an
+                error and it will read that too.
               </p>
             </div>
           )}
@@ -153,7 +298,6 @@ export default function ChatPage() {
               message={message}
               onEscalate={escalate}
               onRate={rate}
-              onBrowseDocs={() => navigate("/app/knowledge")}
             />
           ))}
 
@@ -178,7 +322,7 @@ export default function ChatPage() {
               </div>
               <div className="flex items-center gap-2.5 rounded-none border border-hairline bg-white px-4 py-3 text-[13.5px] text-slate-500">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-none bg-emerald-500" />
-                Searching your runbooks...
+                {phase === "writing" ? "Writing your answer..." : "Looking this up..."}
               </div>
             </div>
           )}
@@ -189,40 +333,16 @@ export default function ChatPage() {
         <ChatComposer onSend={send} busy={busy} />
       </section>
 
-      <aside className="hidden flex-col gap-6 bg-white px-5 py-6 xl:flex">
-        <div>
-          <div className="mb-3 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-            Referenced runbooks
-          </div>
-          {citations.length === 0 ? (
-            <p className="text-[12.5px] text-slate-400">
-              Sources appear here once you ask a question.
-            </p>
-          ) : (
-            <div className="flex flex-col gap-px rounded-none border border-hairline bg-hairline">
-              {citations.map((citation, index) => (
-                <button
-                  key={`${citation.document_id}-${index}`}
-                  type="button"
-                  onClick={() => navigate("/app/knowledge")}
-                  className="rounded-none bg-white px-3 py-3 text-left transition hover:bg-slate-50"
-                >
-                  <span className="block text-[13px] text-ink">{citation.title}</span>
-                  <span className="mt-0.5 block text-[11.5px] text-slate-400">
-                    {citation.page ? `page ${citation.page}` : "runbook"}
-                    {citation.from_image ? " - from a figure" : ""}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </aside>
+      {/*
+        The "Referenced runbooks" rail is gone with the source chips (D-141).
+        It listed documents the reader has no access to and linked to a page
+        they can no longer open. The chat is now the whole width it occupied.
+      */}
     </main>
   );
 }
 
-function MessageBubble({ message, onEscalate, onRate, onBrowseDocs }) {
+function MessageBubble({ message, onEscalate, onRate }) {
   const isAi = message.role === "assistant";
 
   return (
@@ -256,22 +376,16 @@ function MessageBubble({ message, onEscalate, onRate, onBrowseDocs }) {
           </div>
         )}
 
-        {isAi && message.citations?.length > 0 && (
-          <div className="mt-3.5 flex flex-wrap items-center gap-2 border-t border-hairline pt-3">
-            <BookOpen size={14} strokeWidth={1.8} className="text-slate-500" />
-            <span className="text-[12.5px] text-slate-500">Sources:</span>
-            {message.citations.map((citation, index) => (
-              <button
-                key={`${citation.document_id}-${index}`}
-                type="button"
-                onClick={onBrowseDocs}
-                className="rounded-none border border-hairline bg-slate-50 px-2 py-0.5 text-[12px] font-medium text-emerald-700"
-              >
-                {citation.title}
-              </button>
-            ))}
-          </div>
-        )}
+        {/*
+          Source chips removed (D-141). They named internal runbooks to end
+          users who cannot open them, and pointed at a Knowledge Base that is
+          now administrator-only - a label the reader could neither verify nor
+          act on.
+
+          The citations are still stored on the message and still reach the
+          platform admin, so a wrong answer stays explainable. What is gone is
+          only the display.
+        */}
 
         {/* A-008 / D-126: the model proposed this; the click sends it. */}
         {message.proposed_escalation && (

@@ -6,6 +6,7 @@ import json
 import logging
 
 from django.db import connection, transaction
+from django.db.models import Count
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
@@ -23,6 +24,7 @@ from apps.tenancy.context import tenant_context
 from . import escalation, prompts, retrieval
 from .models import Conversation, Message, MessageFeedback, Role
 from .serializers import (
+    ConversationListSerializer,
     ConversationSerializer,
     FeedbackSerializer,
     MessageSerializer,
@@ -61,10 +63,31 @@ class ConversationViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "delete"]
 
     def get_queryset(self):
-        return Conversation.objects.filter(user=self.request.user).prefetch_related("messages")
+        queryset = Conversation.objects.filter(user=self.request.user)
+        if self.action == "list":
+            # The sidebar needs titles and a count, not every message ever sent.
+            # prefetch_related here would pull the whole history of every thread
+            # to render a list of one-line labels.
+            return queryset.annotate(message_count=Count("messages")).order_by("-updated_at")
+        return queryset.prefetch_related("messages")
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ConversationListSerializer
+        return ConversationSerializer
 
     def perform_create(self, serializer):
         serializer.save(tenant=self.request.tenant, user=self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        """Deleting a conversation removes its messages by cascade.
+
+        Left as a hard delete rather than a flag: this is the user's own
+        transcript of their own support requests, and a "deleted" thread that
+        quietly persists is the kind of thing that turns up in a data-subject
+        request later.
+        """
+        return super().destroy(request, *args, **kwargs)
 
     # -- the turn -------------------------------------------------------
 
@@ -77,7 +100,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
         payload.is_valid(raise_exception=True)
 
         try:
-            user_message, hits, attachment_description = self._prepare(
+            user_message, grounded, citable, attachment_description = self._prepare(
                 request, conversation, payload.validated_data
             )
         except (EngineError, BudgetExceeded) as exc:
@@ -94,7 +117,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             tenant_name=request.tenant.name,
             history=self._history(conversation, exclude=user_message.pk),
             question=user_message.text,
-            hits=hits,
+            hits=grounded,
             attachment_description=attachment_description,
         )
 
@@ -121,7 +144,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 status=_status_for(exc),
             )
 
-        assistant = self._persist_answer(conversation, result, hits)
+        assistant = self._persist_answer(conversation, result, citable)
         return Response(MessageSerializer(assistant).data)
 
     @action(detail=True, methods=["post"], url_path="stream")
@@ -142,7 +165,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
         user = request.user
 
         try:
-            user_message, hits, attachment_description = self._prepare(
+            user_message, grounded, citable, attachment_description = self._prepare(
                 request, conversation, payload.validated_data
             )
         except (EngineError, BudgetExceeded) as exc:
@@ -159,10 +182,10 @@ class ConversationViewSet(viewsets.ModelViewSet):
             tenant_name=tenant.name,
             history=self._history(conversation, exclude=user_message.pk),
             question=user_message.text,
-            hits=hits,
+            hits=grounded,
             attachment_description=attachment_description,
         )
-        citations = [hit.citation for hit in hits]
+        citations = [hit.citation for hit in citable]
 
         def event(name: str, data: dict) -> str:
             return f"event: {name}\ndata: {json.dumps(data)}\n\n"
@@ -338,9 +361,17 @@ class ConversationViewSet(viewsets.ModelViewSet):
         # pastes an error dialog and types "what's this?" has told you nothing,
         # but the transcribed error code is highly retrievable.
         search_text = f"{question} {attachment_description}".strip()
-        hits = retrieval.retrieve(search_text)
 
-        return user_message, hits, attachment_description
+        # Two lists, not one (D-138). `grounded` is what the model is shown;
+        # `citable` is what the UI is allowed to claim as a source. A greeting
+        # produces neither, so it gets a plain reply with no fabricated
+        # "Sources: VPN Runbook" chip underneath it.
+        # focus() before gate(): narrow to one document first, THEN decide what
+        # is good enough to show and cite. Gating first would let a strong
+        # passage from the losing runbook survive into the prompt.
+        grounded, citable = retrieval.gate(retrieval.focus(retrieval.retrieve(search_text)))
+
+        return user_message, grounded, citable, attachment_description
 
     def _persist_answer(self, conversation, result, hits):
         proposal = None
