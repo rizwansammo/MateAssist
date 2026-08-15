@@ -217,6 +217,8 @@ class BillingRateSerializer(serializers.ModelSerializer):
             "tenant_name",
             "per_1m_tokens",
             "per_image",
+            "per_request",
+            "per_escalation",
             "currency",
             "effective_from",
             "note",

@@ -246,3 +246,150 @@ def test_statements_are_ordered_by_size(tenants):
 
     rows = billing.statements([alpha, beta], year=YEAR, month=MONTH)
     assert [row["tenant"] for row in rows] == ["Beta", "Alpha"]
+
+
+# ------------------------------------------------------ unit prices (D-169) --
+
+
+def escalate_in_month(tenant, *, count=1, when=None):
+    """Messages stamped as escalated inside the billed window."""
+    from apps.chat.models import Conversation, Message
+    from apps.chat.models import Role as MessageRole
+
+    when = when or timezone.make_aware(dt.datetime(YEAR, MONTH, 10, 9, 0))
+    with transaction.atomic():
+        set_db_tenant(tenant.id)
+        conversation = Conversation.all_objects.create(tenant=tenant, title="Locked out")
+        for index in range(count):
+            message = Message.all_objects.create(
+                tenant=tenant,
+                conversation=conversation,
+                role=MessageRole.ASSISTANT,
+                text=f"escalation {index}",
+                proposed_escalation={"subject": "Help"},
+            )
+            Message.all_objects.filter(pk=message.pk).update(escalation_sent_at=when)
+
+
+def test_a_per_request_contract_needs_no_token_price(tenants):
+    """The reason unit prices beat a mode toggle: "per request only" is just a
+    rate with tokens at zero, using the same table and no new machinery."""
+    alpha, _ = tenants
+    BillingRate.objects.create(
+        tenant=None,
+        per_1m_tokens=Decimal("0"),
+        per_request=Decimal("0.25"),
+        effective_from=dt.date(2026, 1, 1),
+    )
+    log_usage(alpha, prompt=800_000)
+    log_usage(alpha, prompt=900_000)
+
+    result = billing.statement(alpha, year=YEAR, month=MONTH)
+
+    assert result["token_charge"] == "0.00"
+    assert result["request_charge"] == "0.50"
+    assert result["total"] == "0.50"
+
+
+def test_escalations_are_charged_when_a_price_is_set(tenants):
+    alpha, _ = tenants
+    BillingRate.objects.create(
+        tenant=None,
+        per_1m_tokens=Decimal("0"),
+        per_escalation=Decimal("2"),
+        effective_from=dt.date(2026, 1, 1),
+    )
+    escalate_in_month(alpha, count=3)
+
+    result = billing.statement(alpha, year=YEAR, month=MONTH)
+
+    assert result["escalations"] == 3
+    assert result["escalation_charge"] == "6.00"
+    assert result["total"] == "6.00"
+
+
+def test_an_unsent_proposal_is_not_charged(tenants):
+    """A drafted escalation the user never sent has cost the helpdesk nothing
+    and must not appear on an invoice."""
+    from apps.chat.models import Conversation, Message
+    from apps.chat.models import Role as MessageRole
+
+    alpha, _ = tenants
+    BillingRate.objects.create(
+        tenant=None, per_escalation=Decimal("2"), effective_from=dt.date(2026, 1, 1)
+    )
+    with transaction.atomic():
+        set_db_tenant(alpha.id)
+        conversation = Conversation.all_objects.create(tenant=alpha, title="Draft only")
+        Message.all_objects.create(
+            tenant=alpha,
+            conversation=conversation,
+            role=MessageRole.ASSISTANT,
+            text="drafted, never sent",
+            proposed_escalation={"subject": "Help"},
+        )
+
+    result = billing.statement(alpha, year=YEAR, month=MONTH)
+    assert result["escalations"] == 0
+    assert result["total"] == "0.00"
+
+
+def test_escalations_outside_the_month_are_not_charged(tenants):
+    alpha, _ = tenants
+    BillingRate.objects.create(
+        tenant=None, per_escalation=Decimal("2"), effective_from=dt.date(2026, 1, 1)
+    )
+    escalate_in_month(alpha, count=1)
+    escalate_in_month(
+        alpha, count=4, when=timezone.make_aware(dt.datetime(YEAR, MONTH + 1, 2, 9, 0))
+    )
+
+    assert billing.statement(alpha, year=YEAR, month=MONTH)["escalations"] == 1
+
+
+def test_one_workspaces_escalations_are_never_billed_to_another(tenants):
+    alpha, beta = tenants
+    BillingRate.objects.create(
+        tenant=None, per_escalation=Decimal("2"), effective_from=dt.date(2026, 1, 1)
+    )
+    escalate_in_month(alpha, count=1)
+    escalate_in_month(beta, count=5)
+
+    assert billing.statement(alpha, year=YEAR, month=MONTH)["escalations"] == 1
+    assert billing.statement(beta, year=YEAR, month=MONTH)["escalations"] == 5
+
+
+def test_every_unit_price_adds_up(tenants):
+    """A contract can mix them, which is the whole point of not having a mode."""
+    alpha, _ = tenants
+    BillingRate.objects.create(
+        tenant=None,
+        per_1m_tokens=Decimal("15"),
+        per_request=Decimal("0.10"),
+        per_image=Decimal("0.02"),
+        per_escalation=Decimal("2"),
+        effective_from=dt.date(2026, 1, 1),
+    )
+    log_usage(alpha, prompt=500_000, completion=500_000, images=5)
+    escalate_in_month(alpha, count=2)
+
+    result = billing.statement(alpha, year=YEAR, month=MONTH)
+
+    # 1M tokens @15 = 15.00, 1 request @0.10, 5 images @0.02 = 0.10, 2 @2 = 4.00
+    assert result["token_charge"] == "15.00"
+    assert result["request_charge"] == "0.10"
+    assert result["image_charge"] == "0.10"
+    assert result["escalation_charge"] == "4.00"
+    assert result["total"] == "19.20"
+
+
+def test_a_workspace_with_no_rate_still_reports_its_escalations(tenants):
+    """Unbilled usage has to stay visible, or it hides behind a number that
+    looks like a finished answer."""
+    alpha, _ = tenants
+    escalate_in_month(alpha, count=2)
+
+    result = billing.statement(alpha, year=YEAR, month=MONTH)
+
+    assert result["billable"] is False
+    assert result["escalations"] == 2

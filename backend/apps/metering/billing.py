@@ -37,6 +37,31 @@ def month_bounds(year: int, month: int) -> tuple[dt.datetime, dt.datetime]:
     return start, end
 
 
+def _escalations(tenant, *, since, until, alias: str) -> int:
+    """Escalations this workspace actually sent in the window.
+
+    Imported inside the function: chat already depends on metering for the
+    meter, and a module-level import here would close the circle.
+
+    Counts `escalation_sent_at`, which is stamped once by an atomic claim - so
+    a user who clicks the button twice produces one charge, not two. A failed
+    send releases the claim, so nothing that did not leave the building is
+    billed.
+    """
+    from apps.chat.models import Message
+
+    return (
+        Message.all_objects.using(alias)
+        .filter(
+            tenant=tenant,
+            escalation_sent_at__isnull=False,
+            escalation_sent_at__gte=since,
+            escalation_sent_at__lt=until,
+        )
+        .count()
+    )
+
+
 def statement(tenant, *, year: int, month: int, alias: str = rollups.PLATFORM_ALIAS) -> dict:
     """What this workspace owes for one calendar month.
 
@@ -65,15 +90,22 @@ def statement(tenant, *, year: int, month: int, alias: str = rollups.PLATFORM_AL
             "tokens": summary.total_tokens,
             "images": summary.images,
             "requests": summary.requests,
+            "escalations": _escalations(tenant, since=start, until=end, alias=alias),
         }
+
+    escalations = _escalations(tenant, since=start, until=end, alias=alias)
 
     token_charge = (Decimal(summary.total_tokens) / _MILLION) * rate.per_1m_tokens
     image_charge = Decimal(summary.images) * rate.per_image
+    request_charge = Decimal(summary.requests) * rate.per_request
+    escalation_charge = Decimal(escalations) * rate.per_escalation
 
     # Rounded once, at the end. Rounding each line first and adding the results
     # drifts by a cent or two on a large month, and an invoice whose lines do
     # not add up to its total is the kind of thing a customer notices.
-    total = (token_charge + image_charge).quantize(_CENTS, rounding=ROUND_HALF_UP)
+    total = (token_charge + image_charge + request_charge + escalation_charge).quantize(
+        _CENTS, rounding=ROUND_HALF_UP
+    )
 
     return {
         "tenant": tenant.name,
@@ -83,6 +115,8 @@ def statement(tenant, *, year: int, month: int, alias: str = rollups.PLATFORM_AL
         "currency": rate.currency,
         "rate_per_1m_tokens": str(rate.per_1m_tokens),
         "rate_per_image": str(rate.per_image),
+        "rate_per_request": str(rate.per_request),
+        "rate_per_escalation": str(rate.per_escalation),
         "rate_effective_from": rate.effective_from.isoformat(),
         "rate_is_override": rate.tenant_id is not None,
         "requests": summary.requests,
@@ -90,8 +124,11 @@ def statement(tenant, *, year: int, month: int, alias: str = rollups.PLATFORM_AL
         "prompt_tokens": summary.prompt_tokens,
         "completion_tokens": summary.completion_tokens,
         "images": summary.images,
+        "escalations": escalations,
         "token_charge": str(token_charge.quantize(_CENTS, rounding=ROUND_HALF_UP)),
         "image_charge": str(image_charge.quantize(_CENTS, rounding=ROUND_HALF_UP)),
+        "request_charge": str(request_charge.quantize(_CENTS, rounding=ROUND_HALF_UP)),
+        "escalation_charge": str(escalation_charge.quantize(_CENTS, rounding=ROUND_HALF_UP)),
         "total": str(total),
         # What the platform paid providers for the same window. Shown to the
         # platform owner only, and never to the tenant: it is the margin.

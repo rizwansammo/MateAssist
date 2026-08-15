@@ -101,10 +101,19 @@ export function RevenueSection({ tenants = [] }) {
           // looks like a finished answer.
           <div className="border-b border-amber-200 bg-amber-50 px-6 py-3.5">
             <div className="text-[13px] font-semibold text-amber-900">
-              {unbilled.length} workspace(s) have no billing rate, so their usage is not charged
+              {unbilled.length} workspace(s) have no rate in force for {month}, so their usage
+              is not charged
             </div>
             <div className="mt-1 text-[12px] text-amber-800">
-              {unbilled.map((row) => `${row.tenant} (${row.tokens.toLocaleString()} tokens)`).join(", ")}
+              {unbilled
+                .map((row) => `${row.tenant} (${row.tokens.toLocaleString()} tokens)`)
+                .join(", ")}
+            </div>
+            {/* The usual cause is not a missing rate but one dated after the
+                month being viewed, which is invisible without saying so. */}
+            <div className="mt-1.5 text-[12px] text-amber-800">
+              A rate only applies to months that start on or after its effective date. If you
+              added one mid-month, add another dated the 1st to charge {month}.
             </div>
           </div>
         )}
@@ -116,6 +125,7 @@ export function RevenueSection({ tenants = [] }) {
                 <th className={`${HEAD} pl-6`}>Workspace</th>
                 <th className={`${HEAD} text-right`}>Tokens</th>
                 <th className={`${HEAD} text-right`}>Images</th>
+                <th className={`${HEAD} text-right`}>Escalations</th>
                 <th className={`${HEAD} text-right`}>Rate</th>
                 <th className={`${HEAD} text-right`}>Charged</th>
                 <th className={`${HEAD} text-right`}>Our cost</th>
@@ -135,6 +145,9 @@ export function RevenueSection({ tenants = [] }) {
                     {row.tokens.toLocaleString()}
                   </td>
                   <td className={`${CELL} text-right font-mono text-slate-600`}>{row.images}</td>
+                  <td className={`${CELL} text-right font-mono text-slate-600`}>
+                    {row.escalations ?? 0}
+                  </td>
                   <td className={`${CELL} text-right font-mono text-slate-500`}>
                     {row.billable ? `$${row.rate_per_1m_tokens}/1M` : "-"}
                   </td>
@@ -161,7 +174,7 @@ export function RevenueSection({ tenants = [] }) {
               ))}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-6 py-10 text-center text-slate-500">
+                  <td colSpan={8} className="px-6 py-10 text-center text-slate-500">
                     No workspaces to bill for {month}.
                   </td>
                 </tr>
@@ -197,7 +210,9 @@ export function RevenueSection({ tenants = [] }) {
               <tr className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
                 <th className={`${HEAD} pl-6`}>Applies to</th>
                 <th className={`${HEAD} text-right`}>Per 1M tokens</th>
+                <th className={`${HEAD} text-right`}>Per request</th>
                 <th className={`${HEAD} text-right`}>Per image</th>
+                <th className={`${HEAD} text-right`}>Per escalation</th>
                 <th className={HEAD}>Effective from</th>
                 <th className={`${HEAD} pr-6 text-right`}>Actions</th>
               </tr>
@@ -209,7 +224,9 @@ export function RevenueSection({ tenants = [] }) {
                     {rate.tenant_name ?? "All workspaces"}
                   </td>
                   <td className={`${CELL} text-right font-mono`}>${rate.per_1m_tokens}</td>
+                  <td className={`${CELL} text-right font-mono`}>${rate.per_request}</td>
                   <td className={`${CELL} text-right font-mono`}>${rate.per_image}</td>
+                  <td className={`${CELL} text-right font-mono`}>${rate.per_escalation}</td>
                   <td className={`${CELL} text-slate-600`}>{rate.effective_from}</td>
                   <td className={`${CELL} pr-6 text-right`}>
                     <button
@@ -225,7 +242,7 @@ export function RevenueSection({ tenants = [] }) {
               ))}
               {!loading && rates.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-6 py-10 text-center text-slate-500">
+                  <td colSpan={7} className="px-6 py-10 text-center text-slate-500">
                     No rates set, so nothing can be billed yet.
                   </td>
                 </tr>
@@ -255,7 +272,16 @@ function RateDialog({ tenants, onClose, onSaved }) {
     tenant: "",
     per_1m_tokens: "15",
     per_image: "0.02",
-    effective_from: new Date().toISOString().slice(0, 10),
+    // Zero means "do not charge for this unit" rather than "free" - a rate with
+    // tokens at 0 and requests set is simply a per-request contract.
+    per_request: "0",
+    per_escalation: "0",
+    // The FIRST of this month, not today. A month is billed at the rate in
+    // force on its first day, so a rate dated today leaves the month you are
+    // looking at "not billable" the moment you save it - which reads as the
+    // rate having failed. Defaulting to the 1st makes the obvious action
+    // produce the obvious result.
+    effective_from: `${currentMonth()}-01`,
     note: ""
   });
   const [saving, setSaving] = useState(false);
@@ -321,6 +347,17 @@ function RateDialog({ tenants, onClose, onSaved }) {
               />
             </div>
             <div>
+              <label htmlFor="rate_request" className={label}>
+                Per request
+              </label>
+              <input
+                id="rate_request"
+                value={form.per_request}
+                onChange={(e) => setForm({ ...form, per_request: e.target.value })}
+                className={`${field} font-mono`}
+              />
+            </div>
+            <div>
               <label htmlFor="rate_image" className={label}>
                 Per image
               </label>
@@ -331,7 +368,23 @@ function RateDialog({ tenants, onClose, onSaved }) {
                 className={`${field} font-mono`}
               />
             </div>
+            <div>
+              <label htmlFor="rate_escalation" className={label}>
+                Per escalation
+              </label>
+              <input
+                id="rate_escalation"
+                value={form.per_escalation}
+                onChange={(e) => setForm({ ...form, per_escalation: e.target.value })}
+                className={`${field} font-mono`}
+              />
+            </div>
           </div>
+
+          <p className="-mt-1 text-[11.5px] leading-relaxed text-slate-400">
+            These add up. Leave a price at <span className="font-mono">0</span> to not charge
+            for that unit &mdash; a per-request contract is simply tokens at 0.
+          </p>
 
           <div>
             <label htmlFor="rate_from" className={label}>
@@ -345,8 +398,8 @@ function RateDialog({ tenants, onClose, onSaved }) {
               className={field}
             />
             <p className="mt-1.5 text-[11.5px] text-slate-400">
-              A month is billed at the rate in force on its first day. Backdate this to charge a
-              month that has already started.
+              A month is billed at the rate in force on its first day, so this defaults to the
+              1st of this month. Set it later only to schedule a price change.
             </p>
           </div>
         </div>

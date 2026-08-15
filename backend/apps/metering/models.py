@@ -141,6 +141,32 @@ class BillingRate(models.Model):
         default=Decimal("0"),
         help_text="Charged per screenshot read by the vision engine.",
     )
+
+    # Unit prices, not a pricing MODE (D-169).
+    #
+    # A per-token/per-request toggle would force a choice and block a contract
+    # that mixes them. Leaving a price at zero simply does not charge for that
+    # unit, so "per request only" is a rate with tokens at zero - same table, no
+    # enum, and a negotiated hybrid is expressible without new machinery.
+    per_request = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        default=Decimal("0"),
+        help_text="Charged per question asked, whatever its length.",
+    )
+
+    # Charged when MateAssist emails an escalation to the workspace's helpdesk.
+    #
+    # Counted from `escalation_sent_at` on the message, which is written once by
+    # an atomic claim (D-163) - so a user clicking twice cannot be billed twice.
+    # This is escalations RAISED, not tickets resolved: the helpdesk knows the
+    # outcome and MateAssist has no link back to it.
+    per_escalation = models.DecimalField(
+        max_digits=10,
+        decimal_places=4,
+        default=Decimal("0"),
+        help_text="Charged per escalation emailed to the helpdesk.",
+    )
     currency = models.CharField(max_length=3, default="USD")
     effective_from = models.DateField(default=timezone.localdate)
     note = models.CharField(max_length=200, blank=True)

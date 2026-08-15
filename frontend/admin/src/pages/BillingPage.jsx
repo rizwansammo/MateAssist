@@ -140,7 +140,13 @@ export default function BillingPage() {
       </div>
 
       {/* Revenue first, then the cost of producing it (D-160). */}
-      <RevenueSection tenants={rows.map((row) => ({ id: row.tenant_id, name: row.tenant }))} />
+      {/* `tenant_name`, not `tenant`: the spend rows come from
+          platform_by_tenant, which annotates the name under that key. Reading
+          the wrong field left every option in the "Applies to" dropdown blank,
+          so a per-workspace rate looked impossible to create. */}
+      <RevenueSection
+        tenants={rows.map((row) => ({ id: row.tenant_id, name: row.tenant_name }))}
+      />
 
       {totals?.unpriced_models?.length > 0 && (
         <div className="rounded-none border border-amber-300 bg-amber-50 px-5 py-3.5">
