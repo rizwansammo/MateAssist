@@ -18,6 +18,7 @@ from django.core.mail import EmailMessage
 from django.utils import timezone
 
 from apps.audit.models import Level, record
+from apps.tenancy import mail
 
 from .models import Message
 
@@ -110,12 +111,18 @@ def send_escalation(*, tenant, user, conversation, proposal: dict) -> dict:
         transcript=_render_transcript(messages),
     )
 
+    # Sent through the WORKSPACE's own mail server when it has one (D-154).
+    # A message whose From address says @customer.com but which leaves the
+    # platform's server fails their SPF record and lands in spam - so the one
+    # email that matters is the one that silently disappears.
     email = EmailMessage(
         subject=f"[MateAssist] {subject}",
         body=body,
+        from_email=mail.from_address(tenant),
         to=[recipient],
         # Replying reaches the user rather than a no-reply void.
         reply_to=[user.email] if getattr(user, "email", None) else None,
+        connection=mail.connection_for(tenant),
     )
 
     try:

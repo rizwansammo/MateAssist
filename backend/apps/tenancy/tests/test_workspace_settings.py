@@ -189,3 +189,134 @@ def test_hostile_instructions_stay_inside_their_own_block():
     carrying = [m for m in messages if "IGNORE ALL PREVIOUS" in m.content]
     assert len(carrying) == 1
     assert "WORKSPACE INSTRUCTIONS" in carrying[0].content
+
+
+# ------------------------------------------------ outbound mail (D-154) ------
+
+
+def test_the_smtp_password_is_sealed_not_stored_in_the_clear(world):
+    """Same rule as the provider vault: a plain column puts a working mail
+    credential into every database dump and every backup."""
+    tenant = world["alpha"]
+    tenant.set_smtp_password("hunter2-correct-horse")
+    tenant.save(update_fields=["smtp_password_ciphertext"])
+
+    tenant.refresh_from_db()
+    assert "hunter2" not in tenant.smtp_password_ciphertext
+    assert tenant.reveal_smtp_password() == "hunter2-correct-horse"
+
+
+def test_the_api_never_returns_the_smtp_password(world):
+    """Write-only by ABSENCE of a read path, not by a flag that a refactor can
+    flip. The response may say whether one is set; never what it is."""
+    tenant = world["alpha"]
+    tenant.set_smtp_password("hunter2-correct-horse")
+    tenant.smtp_host = "smtp.alpha.test"
+    tenant.smtp_from_email = "helpdesk@alpha.test"
+    tenant.save()
+
+    response = client_for(world["admin"], tenant).get(URL)
+
+    import json
+
+    body = json.dumps(response.data)
+    assert "hunter2" not in body
+    assert "smtp_password" not in response.data
+    assert response.data["smtp_password_set"] is True
+    assert response.data["smtp_configured"] is True
+
+
+def test_a_workspace_admin_can_set_the_mail_server(world):
+    response = client_for(world["admin"], world["alpha"]).patch(
+        URL,
+        {
+            "smtp_host": "smtp.alpha.test",
+            "smtp_port": 587,
+            "smtp_username": "postmaster@alpha.test",
+            "smtp_password": "s3cret-value-here",
+            "smtp_from_email": "helpdesk@alpha.test",
+        },
+    )
+
+    assert response.status_code == 200
+    world["alpha"].refresh_from_db()
+    assert world["alpha"].smtp_host == "smtp.alpha.test"
+    assert world["alpha"].reveal_smtp_password() == "s3cret-value-here"
+
+
+def test_saving_without_the_password_does_not_wipe_it(world):
+    """The trap in every write-only field. An admin editing the From address
+    must not silently clear the credential by not retyping it."""
+    tenant = world["alpha"]
+    tenant.set_smtp_password("keep-me")
+    tenant.smtp_host = "smtp.alpha.test"
+    tenant.save()
+
+    client_for(world["admin"], tenant).patch(URL, {"smtp_from_email": "new@alpha.test"})
+
+    tenant.refresh_from_db()
+    assert tenant.reveal_smtp_password() == "keep-me"
+
+
+def test_an_explicit_empty_password_does_clear_it(world):
+    """Distinguished from the case above: omitting the field means leave it,
+    sending an empty string means remove it."""
+    tenant = world["alpha"]
+    tenant.set_smtp_password("remove-me")
+    tenant.save()
+
+    client_for(world["admin"], tenant).patch(URL, {"smtp_password": ""})
+
+    tenant.refresh_from_db()
+    assert tenant.smtp_password_ciphertext == ""
+
+
+def test_an_end_user_cannot_set_the_mail_server(world):
+    response = client_for(world["member"], world["alpha"]).patch(
+        URL, {"smtp_host": "smtp.evil.test"}
+    )
+    assert response.status_code == 403
+
+
+def test_one_workspaces_credential_cannot_decrypt_as_anothers(world):
+    """The vault context binds ciphertext to its row, so a blob copied between
+    tenants fails to open rather than yielding the other's password."""
+    from apps.ai import vault
+
+    alpha, beta = world["alpha"], world["beta"]
+    alpha.set_smtp_password("alpha-only")
+
+    beta.smtp_password_ciphertext = alpha.smtp_password_ciphertext
+    # VaultError specifically, not a bare Exception. AES-GCM authenticates the
+    # context as additional data, so a mismatched context fails the tag check
+    # rather than decrypting to something wrong - and the vault reports that as
+    # a failed authentication. Naming the exception is the difference between
+    # "it failed" and "it failed for the reason that protects us".
+    from apps.ai.vault import VaultError
+
+    with pytest.raises(VaultError, match="authentication"):
+        vault.open_sealed(beta.smtp_password_ciphertext, context=beta.smtp_vault_context)
+
+
+def test_a_workspace_with_no_mail_server_falls_back_to_the_platform(world):
+    """Escalation must keep working out of the box, before anyone configures
+    anything."""
+    from django.core.mail import get_connection
+
+    from apps.tenancy import mail
+
+    assert not world["alpha"].has_smtp
+    assert type(mail.connection_for(world["alpha"])) is type(get_connection())
+
+
+def test_the_from_address_belongs_to_the_workspace_once_configured(world):
+    """The whole reason per-workspace SMTP exists: a From address of
+    @customer.com leaving the platform's server fails their SPF and is filed as
+    spam."""
+    from apps.tenancy import mail
+
+    tenant = world["alpha"]
+    assert mail.from_address(tenant) != "helpdesk@alpha.test"
+
+    tenant.smtp_from_email = "helpdesk@alpha.test"
+    assert mail.from_address(tenant) == "helpdesk@alpha.test"

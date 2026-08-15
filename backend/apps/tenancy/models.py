@@ -78,6 +78,35 @@ class Tenant(models.Model):
         ),
     )
 
+    # ---- outbound mail, per workspace (D-154) -----------------------------
+    #
+    # Escalations are sent FROM the workspace, not from the platform. That is a
+    # deliverability requirement, not a preference: an email whose From address
+    # says @customer.com but which leaves a server the customer's SPF record
+    # does not authorise gets filed as spam, and the one message that matters -
+    # a user's unresolved problem reaching a human - is the one that vanishes.
+    #
+    # All blank means "use the platform's own mail settings", so a workspace
+    # that does not care still works.
+    smtp_host = models.CharField(max_length=255, blank=True)
+    smtp_port = models.PositiveIntegerField(default=587)
+    smtp_username = models.CharField(max_length=255, blank=True)
+
+    # Sealed with the same AES-256-GCM vault as provider credentials (D-071).
+    # There is no field, serializer or endpoint that returns it - the API can
+    # only report whether one is set. Storing an SMTP password in a plain column
+    # would put a working mail credential in every database dump.
+    smtp_password_ciphertext = models.TextField(blank=True, editable=False)
+
+    smtp_use_tls = models.BooleanField(default=True)
+    smtp_from_email = models.EmailField(
+        blank=True,
+        help_text=(
+            "The From address on escalation emails. Must be one your mail server "
+            "is allowed to send as."
+        ),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -93,6 +122,38 @@ class Tenant(models.Model):
     @property
     def subdomain(self) -> str:
         return f"{self.slug}.{settings.BASE_DOMAIN}"
+
+    # ---- SMTP credential handling ----------------------------------------
+
+    @property
+    def smtp_vault_context(self) -> str:
+        """Binds the ciphertext to this row, so a blob lifted from one tenant
+        cannot be decrypted as another's (D-071)."""
+        return f"tenant-smtp:{self.pk}"
+
+    @property
+    def has_smtp(self) -> bool:
+        """Enough configuration to send. A host alone is not enough - a server
+        that needs auth and gets none fails at send time, which is the worst
+        moment to discover it."""
+        return bool(self.smtp_host and self.smtp_from_email)
+
+    def set_smtp_password(self, secret: str) -> None:
+        from apps.ai import vault
+
+        secret = (secret or "").strip()
+        self.smtp_password_ciphertext = (
+            vault.seal(secret, context=self.smtp_vault_context) if secret else ""
+        )
+
+    def reveal_smtp_password(self) -> str:
+        """Decrypt for an outbound connection. Never for display - nothing in
+        the API returns this, by construction rather than by flag."""
+        from apps.ai import vault
+
+        if not self.smtp_password_ciphertext:
+            return ""
+        return vault.open_sealed(self.smtp_password_ciphertext, context=self.smtp_vault_context)
 
 
 class Membership(models.Model):
