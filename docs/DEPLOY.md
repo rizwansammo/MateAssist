@@ -109,8 +109,18 @@ docker compose -f docker-compose.prod.yml --env-file .env pull
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
-**Deployment is automatic.** A push to `main` builds the three images and
-deploys them: the `.env` image tags are rewritten to the new build, the
+**Deployment is automatic, and gated on CI.** A push to `main` builds the three
+images while CI runs the tests; the deploy step then waits for CI's verdict on
+that exact commit and refuses to proceed unless it passed. An unfinished or
+missing CI result is treated as a failure, never as a pass.
+
+That gate was missing on the first automatic deploy: both workflows are
+triggered by the same push and run side by side, so release finished about three
+minutes ahead of CI and would have shipped a commit whose tests were still
+running. Only the deploy waits - the image builds still run in parallel, so the
+gate costs the difference between the two workflows rather than their sum.
+
+Once past the gate: the `.env` image tags are rewritten to the new build, the
 containers are pulled and restarted, migrations run on the `admin` connection,
 and the four public endpoints are polled until they answer 200 - the job fails
 and prints the backend log if they do not.

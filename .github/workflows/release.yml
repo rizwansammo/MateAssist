@@ -136,6 +136,35 @@ jobs:
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
 
     steps:
+      # Both workflows are triggered by the same push and run side by side, so
+      # without this the deploy lands about three minutes before CI reports.
+      # A failing test suite would then be discovered on a commit that is
+      # already serving users, which is the opposite of what the suite is for.
+      #
+      # Only the DEPLOY waits. The image builds run in parallel with CI, so
+      # gating here costs the difference between the two, not their sum.
+      - name: Wait for CI to pass on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in $(seq 1 60); do
+            run=$(gh run list --workflow=ci.yml --commit "$GITHUB_SHA"                     --limit 1 --json status,conclusion,databaseId)
+            status=$(jq -r '.[0].status // "missing"' <<<"$run")
+            conclusion=$(jq -r '.[0].conclusion // ""' <<<"$run")
+            echo "attempt $attempt: status=$status conclusion=$conclusion"
+
+            if [ "$status" = "completed" ]; then
+              [ "$conclusion" = "success" ] && exit 0
+              echo "::error::CI concluded '$conclusion' for $GITHUB_SHA - refusing to deploy."
+              exit 1
+            fi
+            sleep 15
+          done
+          # Never deploy on a timeout. An unknown CI result is not a pass, and
+          # guessing here would reintroduce exactly the hole this closes.
+          echo "::error::CI did not finish within 15 minutes - refusing to deploy."
+          exit 1
+
       - name: Work out which tag to deploy
         id: version
         run: |
