@@ -39,6 +39,12 @@ dependencies = [
     "openai>=1.40",                         # D-040: DeepSeek is OpenAI-compatible
     "google-genai>=0.3",                    # D-041: Gemini vision
     "sentence-transformers>=3.0",           # D-060: local bge-small embeddings
+    # Required by DRF's ImageField, which is what verifies a pasted screenshot
+    # is genuinely an image rather than a renamed payload. It was never declared
+    # and never installed, so chat with an attachment raised
+    # ModuleNotFoundError: No module named 'PIL' - a 500 on the one path no test
+    # exercised (D-153).
+    "Pillow>=10.4",
     "PyMuPDF>=1.24",                        # D-051: PDF text + image extraction
     "python-docx>=1.1",                     # D-052
     "boto3>=1.35",                          # D-013: object storage
