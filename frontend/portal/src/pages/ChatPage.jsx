@@ -43,6 +43,16 @@ export default function ChatPage() {
   const [loadingThread, setLoadingThread] = useState(false);
   const bottomRef = useRef(null);
 
+  // Set when THIS component navigated to a conversation it just created, so the
+  // URL-change effect below knows to leave the messages alone.
+  //
+  // Without it, sending the first message looked broken: the message appeared,
+  // then vanished for the whole wait, then reappeared with the answer. Creating
+  // the conversation changes the URL, the URL effect fetches from the server,
+  // and the server's copy did not yet include the message being sent - so the
+  // fetch overwrote it with an empty list.
+  const skipNextLoad = useRef(false);
+
   const loadThreads = useCallback(async () => {
     try {
       const payload = await chatApi.listConversations();
@@ -63,6 +73,12 @@ export default function ChatPage() {
     let live = true;
     if (!conversationId) {
       setMessages([]);
+      return undefined;
+    }
+    // We navigated here ourselves mid-send and already hold the newer state.
+    // Refetching now would replace the message the user is watching.
+    if (skipNextLoad.current) {
+      skipNextLoad.current = false;
       return undefined;
     }
     setLoadingThread(true);
@@ -103,6 +119,7 @@ export default function ChatPage() {
       if (!id) {
         const created = await chatApi.createConversation();
         id = created.id;
+        skipNextLoad.current = true;
         navigate(`/app/chat/${id}`, { replace: true });
       }
 
@@ -110,6 +127,11 @@ export default function ChatPage() {
       await chatApi.stream(id, { text, image }, (event, data) => {
         if (event === "start") {
           setPhase("writing");
+          // The server has persisted the user's message and titled the thread
+          // by this point, so the sidebar can show it now rather than after the
+          // answer finishes. Waiting made a new conversation look unsaved for
+          // the whole wait.
+          loadThreads();
         } else if (event === "delta") {
           collected += data.text;
           setStreaming(collected);
