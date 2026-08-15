@@ -22,44 +22,54 @@ import Markdown from "react-markdown";
 const COMPONENTS = {
   p: ({ children }) => <p className="mb-3 last:mb-0 leading-relaxed">{children}</p>,
 
-  // Ordered lists carry the steps, so they get the most attention: a marker
-  // that reads as a step number rather than a bullet, and enough spacing that
-  // one step does not blur into the next.
+  // Marker styling lives on the LIST, targeting its direct children, rather
+  // than on the item.
+  //
+  // The item used to decide for itself by reading
+  // `props.node.parentNode.tagName`. react-markdown v10 does not expose a
+  // parent link, so that check silently evaluated to undefined and every
+  // numbered step rendered as a bullet - the model was emitting correct
+  // ordered lists and we were flattening them. Styling from the parent cannot
+  // drift that way: an `ol` is an `ol` whatever the library passes down.
   ol: ({ children }) => (
-    <ol className="mb-3 last:mb-0 ml-0 list-none space-y-2 [counter-reset:step]">{children}</ol>
+    <ol
+      className="mb-3 last:mb-0 ml-0 list-none space-y-2.5 [counter-reset:step] [&>li]:relative [&>li]:pl-7 [&>li]:leading-relaxed [&>li]:[counter-increment:step] [&>li]:before:absolute [&>li]:before:left-0 [&>li]:before:top-[2px] [&>li]:before:flex [&>li]:before:h-[18px] [&>li]:before:w-[18px] [&>li]:before:items-center [&>li]:before:justify-center [&>li]:before:bg-ink [&>li]:before:text-[10.5px] [&>li]:before:font-bold [&>li]:before:text-emerald-400 [&>li]:before:content-[counter(step)]"
+    >
+      {children}
+    </ol>
   ),
   ul: ({ children }) => (
-    <ul className="mb-3 last:mb-0 ml-0 list-none space-y-1.5">{children}</ul>
+    <ul className="mb-3 last:mb-0 ml-0 list-none space-y-1.5 [&>li]:relative [&>li]:pl-4 [&>li]:leading-relaxed [&>li]:before:absolute [&>li]:before:left-0 [&>li]:before:top-[9px] [&>li]:before:h-[5px] [&>li]:before:w-[5px] [&>li]:before:bg-emerald-500 [&>li]:before:content-['']">
+      {children}
+    </ul>
   ),
-  li: ({ children, ...props }) => {
-    const ordered = props.node?.parentNode?.tagName === "ol";
-    return ordered ? (
-      <li className="relative pl-7 leading-relaxed [counter-increment:step] before:absolute before:left-0 before:top-[3px] before:flex before:h-[18px] before:w-[18px] before:items-center before:justify-center before:bg-ink before:text-[10.5px] before:font-bold before:text-emerald-400 before:content-[counter(step)]">
-        {children}
-      </li>
-    ) : (
-      <li className="relative pl-4 leading-relaxed before:absolute before:left-0 before:top-[9px] before:h-[5px] before:w-[5px] before:bg-emerald-500 before:content-['']">
-        {children}
-      </li>
-    );
-  },
 
   strong: ({ children }) => <strong className="font-semibold text-ink">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
 
   // Inline code is commands and paths - the things people copy and mistype.
-  code: ({ inline, children }) =>
-    inline ? (
-      <code className="rounded-none border border-hairline bg-slate-100 px-1.5 py-[1px] font-mono text-[12.5px] text-ink">
-        {children}
-      </code>
-    ) : (
-      <code className="block font-mono text-[12.5px] leading-relaxed text-slate-100">
-        {children}
-      </code>
-    ),
+  //
+  // Always styled for INLINE use. The block case is handled by `pre` below,
+  // which restyles the code it contains.
+  //
+  // This used to branch on an `inline` prop. react-markdown stopped passing it
+  // at v9, so it read as undefined and EVERY inline snippet took the block
+  // branch - white text, no background, on a white bubble. Commands the reader
+  // was meant to copy were rendered invisible, and the answer looked like the
+  // unformatted prose the formatting rules exist to prevent.
+  //
+  // Nothing here now depends on a prop the library may stop sending.
+  code: ({ children }) => (
+    <code className="rounded-none border border-hairline bg-slate-100 px-1.5 py-[1px] font-mono text-[12.5px] text-ink">
+      {children}
+    </code>
+  ),
+
+  // A fenced block owns its contents, so it strips the inline chrome off the
+  // `code` inside it via a descendant selector rather than by asking the code
+  // element to know where it lives.
   pre: ({ children }) => (
-    <pre className="mb-3 last:mb-0 overflow-x-auto rounded-none border border-slate-800 bg-ink p-3.5">
+    <pre className="mb-3 last:mb-0 overflow-x-auto rounded-none border border-slate-800 bg-ink p-3.5 [&_code]:block [&_code]:border-0 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[12.5px] [&_code]:leading-relaxed [&_code]:text-slate-100">
       {children}
     </pre>
   ),

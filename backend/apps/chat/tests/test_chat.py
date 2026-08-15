@@ -341,3 +341,36 @@ def test_the_prompt_asks_for_scannable_formatting():
     assert "never run steps together inside a paragraph" in system
     assert "`backticks`" in system
     assert "fenced code block" in system
+
+
+def test_the_assistant_must_match_the_error_not_the_topic():
+    """The failure this rule exists for (D-157).
+
+    A user uploaded a `CommandNotFoundException` - a script that did not exist
+    yet. Retrieval returned the execution-policy runbook, which is a genuinely
+    good match on topic: same product, same console, overlapping vocabulary. The
+    model then walked the user through changing their execution policy, a
+    setting that had nothing to do with their problem.
+
+    Nothing upstream can catch this. Both texts are about PowerShell, so their
+    similarity scores are legitimately high and the relevance gate (D-138)
+    passes them. The distinction is between two errors that read alike, and only
+    the model is holding both the runbook and the user's actual symptom.
+    """
+    system = flattened()
+
+    assert "match the exact error, not the topic" in system
+    # Named explicitly, because the abstract instruction alone did not hold: the
+    # prompt already said "ground every claim" when this answer was produced.
+    assert "the same product is not the same problem" in system
+    assert "never adapt, stretch or partly apply a procedure" in system
+
+
+def test_a_mismatched_runbook_must_lead_to_escalation_not_a_guess():
+    """Refusing is only half an answer. A user told "no runbook covers this" and
+    nothing else is worse off than before - they still have the problem and now
+    have no route forward either."""
+    system = flattened()
+
+    assert "i don't have a runbook that covers this specific error" in system
+    assert "offer the escalation route immediately" in system

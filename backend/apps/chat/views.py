@@ -7,7 +7,8 @@ import logging
 
 from django.db import connection, transaction
 from django.db.models import Count
-from django.http import StreamingHttpResponse
+from django.http import Http404, HttpResponse, StreamingHttpResponse
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
@@ -55,6 +56,22 @@ def _status_for(exc) -> int:
     if isinstance(exc, NoKeyAvailable):
         return status.HTTP_503_SERVICE_UNAVAILABLE
     return status.HTTP_502_BAD_GATEWAY
+
+
+# Inferred from the stored key's extension rather than persisted. Uploads are
+# already restricted to these types at the door, so a key with any other suffix
+# is not a format to guess at.
+_MIME_BY_SUFFIX = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+}
+
+
+def _attachment_mime(key: str) -> str:
+    return _MIME_BY_SUFFIX.get(key.rsplit(".", 1)[-1].lower(), "application/octet-stream")
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
@@ -258,6 +275,43 @@ class ConversationViewSet(viewsets.ModelViewSet):
         return response
 
     @extend_schema(responses={200: dict})
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path=r"messages/(?P<message_id>[0-9]+)/attachment",
+    )
+    def attachment(self, request, pk=None, message_id=None):
+        """Serve a message's screenshot back to the person who sent it.
+
+        Routed under the conversation rather than as a flat /messages/<id>/ so
+        authorisation is structural: get_object() already restricts to
+        conversations owned by this user in this tenant, and the message is then
+        looked up WITHIN that conversation. There is no id an attacker can
+        substitute that escapes both checks.
+
+        Streamed through Django instead of a presigned URL because the object
+        store is not reachable from a browser, and a self-authorising link to a
+        user's screenshot would survive in logs and history.
+        """
+        conversation = self.get_object()
+        message = get_object_or_404(
+            Message.all_objects.filter(conversation=conversation), pk=message_id
+        )
+        if not message.attachment_key:
+            raise Http404("This message has no attachment.")
+
+        try:
+            data = storage.get(message.attachment_key)
+        except Exception:  # noqa: BLE001
+            logger.warning("attachment missing from storage: %s", message.attachment_key)
+            raise Http404("The attachment is no longer available.") from None
+
+        response = HttpResponse(data, content_type=_attachment_mime(message.attachment_key))
+        # Private, not public: this is one user's screenshot, and a shared cache
+        # holding it would serve it to whoever asked next.
+        response["Cache-Control"] = "private, max-age=3600"
+        return response
+
     @action(detail=True, methods=["post"], url_path="escalate")
     def escalate(self, request, pk=None):
         """Send the escalation email. Only reachable by an explicit user action.

@@ -13,7 +13,14 @@
 # Keep this in step with ci.yml. If a step is added there and not here, the gate
 # stops meaning "CI will pass" and starts meaning "some of CI will pass".
 
-$ErrorActionPreference = "Stop"
+# Continue, NOT Stop. Under PowerShell 5.1 a native executable writing to stderr
+# becomes a terminating ErrorRecord when this is "Stop" - and black, ruff and
+# npm all write ordinary progress output there. The first run of this script
+# reported "GATE FAILED: Format (black)" while black itself was exiting 0.
+#
+# A gate that cries wolf is worse than no gate: it trains you to ignore it. Exit
+# codes are the only failure signal here.
+$ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $root "backend\.venv\Scripts\python.exe"
 
@@ -30,15 +37,19 @@ function Step {
     Write-Host ""
     Write-Host "-> $Name" -ForegroundColor Cyan
     Push-Location $Directory
+    $global:LASTEXITCODE = 0
     try {
         & $Body
-        # Native executables report through $LASTEXITCODE, which does not throw.
+        # $LASTEXITCODE is the whole verdict. Native tools do not throw, and
+        # their stderr output is not a failure - see the note at the top.
         if ($LASTEXITCODE -ne 0) {
             $script:failed += $Name
-            Write-Host "   FAILED" -ForegroundColor Red
+            Write-Host "   FAILED (exit $LASTEXITCODE)" -ForegroundColor Red
         }
     }
     catch {
+        # Only reachable for real PowerShell faults - a missing executable, a
+        # bad path - never for a tool that merely printed to stderr.
         $script:failed += $Name
         Write-Host "   FAILED: $_" -ForegroundColor Red
     }

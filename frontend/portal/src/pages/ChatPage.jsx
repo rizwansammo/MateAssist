@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { AnswerBody } from "../components/AnswerBody.jsx";
 import { ChatComposer } from "../components/ChatComposer.jsx";
+import { MessageAttachment } from "../components/MessageAttachment.jsx";
 import { usePortal } from "../context/PortalContext.jsx";
 import { chatApi } from "../lib/chat.js";
 
@@ -110,7 +111,18 @@ export default function ChatPage() {
     setBusy(true);
     setStreaming("");
     setPhase("searching");
-    const optimistic = { id: `local-${Date.now()}`, role: "user", text, pending: Boolean(image) };
+    // The preview is created before anything is sent, so the screenshot appears
+    // in the user's own bubble the instant they press send. Waiting for the
+    // server meant the picture arrived after the answer did, which read as the
+    // attachment having been lost.
+    const previewUrl = image ? URL.createObjectURL(image) : null;
+    const optimistic = {
+      id: `local-${Date.now()}`,
+      role: "user",
+      text,
+      previewUrl,
+      pending: Boolean(image)
+    };
     setMessages((prev) => [...prev, optimistic]);
 
     try {
@@ -152,6 +164,10 @@ export default function ChatPage() {
       notify("Message failed", error.message, "warn");
       setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
     } finally {
+      // The persisted message serves its own image from here on, so the local
+      // blob is dead weight. Not revoking it leaks every screenshot sent for as
+      // long as the tab stays open.
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
       setBusy(false);
       setPhase(null);
     }
@@ -319,6 +335,7 @@ export default function ChatPage() {
             <MessageBubble
               key={message.id}
               message={message}
+              conversationId={conversationId}
               onEscalate={escalate}
               onRate={rate}
             />
@@ -365,7 +382,7 @@ export default function ChatPage() {
   );
 }
 
-function MessageBubble({ message, onEscalate, onRate }) {
+function MessageBubble({ message, conversationId, onEscalate, onRate }) {
   const isAi = message.role === "assistant";
 
   return (
@@ -391,16 +408,16 @@ function MessageBubble({ message, onEscalate, onRate }) {
           </p>
         )}
 
-        {message.attachment_description && (
-          <div className="mt-3 rounded-none border border-slate-700 bg-ink2 p-3">
-            <div className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-cyan-400">
-              Screenshot read by the vision engine
-            </div>
-            <p className="mt-1.5 text-[12px] leading-relaxed text-slate-300">
-              {message.attachment_description}
-            </p>
-          </div>
-        )}
+        {/*
+          The screenshot itself, not the vision engine's transcription of it.
+          Showing the transcription was showing the reader our plumbing: they
+          know what they sent, and a wall of machine-read text in place of their
+          own picture reads as though the upload went wrong.
+
+          The description is still produced and still stored - it is what the
+          text engine reasons over (D-042). It simply is not the user's business.
+        */}
+        <MessageAttachment message={message} conversationId={conversationId} />
 
         {/*
           Source chips removed (D-141). They named internal runbooks to end

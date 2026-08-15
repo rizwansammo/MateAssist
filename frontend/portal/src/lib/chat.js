@@ -22,6 +22,24 @@ export const chatApi = {
     return rawPost(`/chat/conversations/${id}/send/`, form).then((r) => r.json());
   },
 
+  /**
+   * Fetch a message's screenshot as an object URL.
+   *
+   * Not an <img src> pointing straight at the endpoint: the access token lives
+   * in memory rather than a cookie (D-031), and an image request carries no
+   * Authorization header. Fetching the blob keeps the same authenticated path -
+   * including the refresh-on-401 retry - as every other call.
+   *
+   * The caller owns the returned URL and must revokeObjectURL it, or every
+   * screenshot viewed stays in memory for the life of the tab.
+   */
+  async attachmentUrl(conversationId, messageId) {
+    const response = await rawGet(
+      `/chat/conversations/${conversationId}/messages/${messageId}/attachment/`
+    );
+    return URL.createObjectURL(await response.blob());
+  },
+
   escalate: (id, proposal) =>
     apiFetch(`/chat/conversations/${id}/escalate/`, { method: "POST", body: { proposal } }),
 
@@ -85,6 +103,21 @@ export const chatApi = {
  * refreshed silently. Leaving apiFetch means giving up its behaviour, so the
  * behaviour has to be restored, not assumed.
  */
+async function rawGet(path, retrying = false) {
+  const token = getAccessToken();
+  const response = await fetch(`${BASE_URL}${path}`, {
+    credentials: "include",
+    headers: token ? { Authorization: `Bearer ${token}` } : {}
+  });
+
+  if (response.status === 401 && !retrying) {
+    await api.restoreSession();
+    return rawGet(path, true);
+  }
+  if (!response.ok) throw new Error(`Could not load the attachment (${response.status})`);
+  return response;
+}
+
 async function rawPost(path, body, signal, retrying = false) {
   const token = getAccessToken();
   const response = await fetch(`${BASE_URL}${path}`, {

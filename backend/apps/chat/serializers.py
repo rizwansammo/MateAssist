@@ -5,7 +5,19 @@ from .models import Conversation, Message
 
 class MessageSerializer(serializers.ModelSerializer):
     """The attachment KEY is not exposed - it is an internal storage path, and a
-    client that needs the image gets a signed URL after an authorisation check."""
+    client that needs the image fetches it through an endpoint that performs the
+    authorisation check.
+
+    `has_attachment` is a boolean rather than a URL on purpose. The object store
+    is not reachable from a browser, and minting a link that carries its own
+    authority would put a working handle to a user's screenshot into anything
+    that logs a URL.
+    """
+
+    has_attachment = serializers.SerializerMethodField()
+
+    def get_has_attachment(self, obj) -> bool:
+        return bool(obj.attachment_key)
 
     class Meta:
         model = Message
@@ -15,6 +27,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "text",
             "citations",
             "attachment_description",
+            "has_attachment",
             "proposed_escalation",
             "created_at",
         )
