@@ -11,14 +11,30 @@ export const vaultApi = {
   list: (engine) => apiFetch(`/platform/keys/${engine ? `?engine=${engine}` : ""}`),
   poolStatus: () => apiFetch("/platform/keys/pool_status/"),
 
-  create: ({ engine, label, secret, weight = 1, daily_quota = null }) =>
+  // `provider`, `base_url` and `model` are forwarded deliberately (D-149).
+  //
+  // They were missing here until deployment. A-010 made the vendor a per-key
+  // choice and added all three to the API, but this client still destructured
+  // the pre-A-010 field list - so whatever the operator selected in the dialog
+  // was dropped on the floor, the serializer fell back to its default of
+  // OPENAI_COMPATIBLE, and saving a Gemini key failed with "a base URL is
+  // required for a generic OpenAI-compatible endpoint".
+  //
+  // Nothing was wrong with the form or the API. The bug lived entirely in the
+  // gap between them, which is why neither side's tests could see it.
+  create: ({ engine, provider, base_url, model, label, secret, weight = 1, daily_quota = null }) =>
     apiFetch("/platform/keys/", {
       method: "POST",
-      body: { engine, label, secret, weight, daily_quota }
+      body: { engine, provider, base_url, model, label, secret, weight, daily_quota }
     }),
 
-  rotate: (id, { label, secret }) =>
-    apiFetch(`/platform/keys/${id}/rotate/`, { method: "POST", body: { label, secret } }),
+  // Rotation may also change the provider behind a role - swapping a key from
+  // Gemini to DeepSeek is a configuration change, not a new engine (A-010).
+  rotate: (id, { provider, base_url, model, label, secret }) =>
+    apiFetch(`/platform/keys/${id}/rotate/`, {
+      method: "POST",
+      body: { provider, base_url, model, label, secret }
+    }),
 
   revoke: (id) => apiFetch(`/platform/keys/${id}/revoke/`, { method: "POST" }),
   purge: (id) => apiFetch(`/platform/keys/${id}/`, { method: "DELETE" }),

@@ -128,12 +128,18 @@ server {
         proxy_read_timeout 120s;
     }
 
-    # ---- marketing site (not built yet) ----
-    # A holding response rather than a redirect to /platform_admin: redirecting
-    # would advertise the admin path to anyone who lands on the domain.
+    # ---- marketing site ----
+    # A static file served straight from disk. No container and no build step:
+    # it is one self-contained HTML file with inlined CSS and no external
+    # requests, so it cannot break when the app is redeployed and it stays up
+    # even if every container is down.
+    #
+    # Deliberately not a redirect to /platform_admin - that would advertise the
+    # admin path to anyone who lands on the domain.
     location / {
-        default_type text/html;
-        return 200 '<!doctype html><meta charset="utf-8"><title>MateAssist</title><body style="font-family:system-ui;padding:3rem"><h1>MateAssist</h1><p>Coming soon.</p></body>';
+        root      /opt/MateAssist/www;
+        index     index.html;
+        try_files $uri $uri/ /index.html;
     }
 }
 
