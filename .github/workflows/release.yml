@@ -143,14 +143,28 @@ jobs:
       #
       # Only the DEPLOY waits. The image builds run in parallel with CI, so
       # gating here costs the difference between the two, not their sum.
+      # Both workflows are triggered by the same push and run side by side, so
+      # without this the deploy lands about three minutes before CI reports.
+      # A failing test suite would then be discovered on a commit that is
+      # already serving users, which is the opposite of what the suite is for.
+      #
+      # Only the DEPLOY waits. The image builds run in parallel with CI, so
+      # gating here costs the difference between the two, not their sum.
       - name: Wait for CI to pass on this commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           for attempt in $(seq 1 60); do
-            run=$(gh run list --workflow=ci.yml --commit "$GITHUB_SHA"                     --limit 1 --json status,conclusion,databaseId)
-            status=$(jq -r '.[0].status // "missing"' <<<"$run")
-            conclusion=$(jq -r '.[0].conclusion // ""' <<<"$run")
+            # --repo because this job never checks the code out - it only SSHes -
+            # so gh has no git directory to infer the repository from and fails
+            # with "not a git repository".
+            #
+            # gh's own --jq rather than piping to jq: one fewer thing that has to
+            # be installed on the runner for a safety gate to work. `.[0] // {}`
+            # covers the first seconds when CI has not registered a run yet.
+            state=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow=ci.yml                       --commit "$GITHUB_SHA" --limit 1                       --json status,conclusion                       --jq '.[0] // {} | "\(.status // "missing") \(.conclusion // "none")"')
+            status=${state%% *}
+            conclusion=${state##* }
             echo "attempt $attempt: status=$status conclusion=$conclusion"
 
             if [ "$status" = "completed" ]; then
