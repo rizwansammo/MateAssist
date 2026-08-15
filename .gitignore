@@ -4,6 +4,11 @@
 .env
 .env.*
 !.env.example
+# `.env.*` also matched the production TEMPLATE, so infra/.env.prod.example was
+# silently untracked - and DEPLOY.md instructed the reader to copy a file that
+# does not exist in a fresh clone. Templates hold no secrets and must ship.
+!.env.prod.example
+!**/.env.prod.example
 *.pem
 *.key
 !**/fonts/*.otf
