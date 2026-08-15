@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, Bot, Check, Mail, MessageSquare, Plus, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, Bot, Check, Mail } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { AnswerBody } from "../components/AnswerBody.jsx";
 import { ChatComposer } from "../components/ChatComposer.jsx";
 import { MessageAttachment } from "../components/MessageAttachment.jsx";
+import { useConversations } from "../context/ConversationsContext.jsx";
 import { usePortal } from "../context/PortalContext.jsx";
 import { chatApi } from "../lib/chat.js";
 
@@ -29,6 +30,8 @@ import { chatApi } from "../lib/chat.js";
  */
 export default function ChatPage() {
   const { notify } = usePortal();
+  // The sidebar renders the list; this page only tells it when to reread.
+  const { refresh: loadThreads } = useConversations();
   const navigate = useNavigate();
   const { conversationId: routeId } = useParams();
   const conversationId = routeId ? Number(routeId) : null;
@@ -42,7 +45,6 @@ export default function ChatPage() {
   // so a single "Searching your runbooks..." label was untrue for almost the
   // entire wait.
   const [phase, setPhase] = useState(null);
-  const [threads, setThreads] = useState([]);
   const [loadingThread, setLoadingThread] = useState(false);
   const bottomRef = useRef(null);
 
@@ -55,21 +57,6 @@ export default function ChatPage() {
   // and the server's copy did not yet include the message being sent - so the
   // fetch overwrote it with an empty list.
   const skipNextLoad = useRef(false);
-
-  const loadThreads = useCallback(async () => {
-    try {
-      const payload = await chatApi.listConversations();
-      setThreads(Array.isArray(payload) ? payload : (payload?.results ?? []));
-    } catch {
-      // The sidebar is navigation, not content. A failed poll must not replace
-      // the conversation the user is reading with an error page.
-      setThreads([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadThreads();
-  }, [loadThreads]);
 
   // Open whatever the URL points at, including on a cold load or a refresh.
   useEffect(() => {
@@ -174,18 +161,6 @@ export default function ChatPage() {
     }
   };
 
-  const removeThread = async (id, event) => {
-    event.stopPropagation();
-    if (!window.confirm("Delete this conversation? This cannot be undone.")) return;
-    try {
-      await chatApi.remove(id);
-      setThreads((prev) => prev.filter((t) => t.id !== id));
-      if (id === conversationId) navigate("/app/chat", { replace: true });
-    } catch (error) {
-      notify("Could not delete", error.message, "warn");
-    }
-  };
-
   const escalate = async (message) => {
     // Guarded here as well as on the server. The server refuses a repeat, but
     // without this the button stays pressable while the first request is in
@@ -236,72 +211,11 @@ export default function ChatPage() {
     navigate("/app/chat");
   };
 
+  // One column. The conversation rail moved into the app sidebar (D-164),
+  // where every other chat product keeps it - two sidebars made MateAssist look
+  // like two applications side by side.
   return (
-    <main className="grid min-h-[calc(100vh-66px)] grid-cols-1 xl:grid-cols-[260px_1fr]">
-      <aside className="hidden flex-col border-r border-hairline bg-white xl:flex">
-        <div className="sticky top-[66px] z-10 border-b border-hairline bg-white px-4 py-4">
-          <button
-            type="button"
-            onClick={newChat}
-            className="flex w-full items-center justify-center gap-2 rounded-none bg-emerald-600 px-3.5 py-2.5 text-[13px] font-semibold text-white transition hover:bg-emerald-700"
-          >
-            <Plus size={15} strokeWidth={2} />
-            New chat
-          </button>
-        </div>
-
-        <div className="flex flex-col gap-px overflow-y-auto px-4 py-4">
-          <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-            Your conversations
-          </div>
-          {threads.length === 0 ? (
-            <p className="text-[12.5px] leading-relaxed text-slate-400">
-              Nothing yet. Ask a question and it will be saved here.
-            </p>
-          ) : (
-            threads.map((thread) => {
-              const active = thread.id === conversationId;
-              return (
-                <button
-                  key={thread.id}
-                  type="button"
-                  onClick={() => navigate(`/app/chat/${thread.id}`)}
-                  className={`group flex items-start gap-2.5 rounded-none border-l-2 px-3 py-2.5 text-left transition ${
-                    active
-                      ? "border-emerald-500 bg-slate-50"
-                      : "border-transparent hover:bg-slate-50"
-                  }`}
-                >
-                  <MessageSquare
-                    size={14}
-                    strokeWidth={1.8}
-                    className="mt-0.5 flex-none text-slate-400"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] text-ink">
-                      {thread.title || "New conversation"}
-                    </span>
-                    <span className="mt-0.5 block text-[11px] text-slate-400">
-                      {thread.escalated_at
-                        ? "Sent to IT"
-                        : `${thread.message_count} message${thread.message_count === 1 ? "" : "s"}`}
-                    </span>
-                  </span>
-                  <span
-                    role="button"
-                    tabIndex={-1}
-                    aria-label="Delete conversation"
-                    onClick={(event) => removeThread(thread.id, event)}
-                    className="flex-none p-1 text-slate-300 opacity-0 transition hover:text-red-600 group-hover:opacity-100"
-                  >
-                    <Trash2 size={13} strokeWidth={1.8} />
-                  </span>
-                </button>
-              );
-            })
-          )}
-        </div>
-      </aside>
+    <main className="flex min-h-[calc(100vh-66px)] flex-col">
 
       <section className="flex min-w-0 flex-col bg-white">
         <div className="sticky top-[66px] z-10 flex items-center gap-3 border-b border-hairline bg-white px-6 py-4">

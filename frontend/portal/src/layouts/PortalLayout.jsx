@@ -3,20 +3,24 @@ import {
   Bot,
   BookOpen,
   Bell,
-  ChevronDown,
   LayoutDashboard,
+  MessageSquare,
+  Plus,
   Search,
   Settings,
+  Trash2,
   Users
 } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Toast, Wordmark } from "@mateassist/ui";
 
 import { useAuth } from "../context/AuthContext.jsx";
+import { ConversationsProvider, useConversations } from "../context/ConversationsContext.jsx";
 import { PortalProvider, usePortal } from "../context/PortalContext.jsx";
 import { ProfileMenu } from "../components/ProfileMenu.jsx";
 import { workspaceHost } from "../lib/domain.js";
 import { api } from "../lib/api.js";
+import { chatApi } from "../lib/chat.js";
 
 // "My Tickets" is gone with A-008: there is no ticket table, and a nav item
 // pointing at invented rows is worse than one fewer link.
@@ -59,7 +63,88 @@ const HEALTH_STATE = {
   unknown: { label: "Status unavailable", dot: "bg-slate-500", text: "text-slate-400" }
 };
 
-function Sidebar({ tenant, isAdmin }) {
+function Recents() {
+  /* The conversation list, in the one sidebar rather than a second column of
+     its own (D-164). Dark-surface styling to match the rail it now lives in -
+     the light card treatment came from being on a white page. */
+  const { threads, loading } = useConversations();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { drop } = useConversations();
+
+  // Read from the URL rather than props: the layout has no chat state, and the
+  // path is the single source of truth for which thread is open.
+  const openId = Number(location.pathname.match(/\/app\/chat\/(\d+)/)?.[1]);
+
+  const remove = async (id, event) => {
+    event.stopPropagation();
+    if (!window.confirm("Delete this conversation? This cannot be undone.")) return;
+    try {
+      await chatApi.remove(id);
+      drop(id);
+      if (id === openId) navigate("/app/chat", { replace: true });
+    } catch {
+      /* the thread stays; the next refresh corrects it */
+    }
+  };
+
+  if (loading && threads.length === 0) return null;
+
+  return (
+    <div className="mt-5 flex min-h-0 flex-1 flex-col">
+      <div className="px-5 pb-2.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-600">
+        Recents
+      </div>
+
+      {threads.length === 0 ? (
+        <p className="px-5 text-[12px] leading-relaxed text-slate-600">
+          Nothing yet. Ask a question and it will be saved here.
+        </p>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-3.5">
+          {threads.map((thread) => {
+            const active = thread.id === openId;
+            return (
+              <button
+                key={thread.id}
+                type="button"
+                onClick={() => navigate(`/app/chat/${thread.id}`)}
+                className={`group flex items-center gap-2.5 rounded-none border-l-2 px-3.5 py-2 text-left transition ${
+                  active
+                    ? "border-emerald-500 bg-ink2 text-white"
+                    : "border-transparent text-slate-400 hover:bg-ink2 hover:text-slate-200"
+                }`}
+              >
+                <MessageSquare size={14} strokeWidth={1.8} className="flex-none opacity-70" />
+                <span className="min-w-0 flex-1 truncate text-[13px]">
+                  {thread.title || "New conversation"}
+                </span>
+                {thread.escalated_at && (
+                  <span
+                    title="Sent to IT"
+                    className="h-[6px] w-[6px] flex-none rounded-none bg-emerald-500"
+                  />
+                )}
+                <span
+                  role="button"
+                  tabIndex={-1}
+                  aria-label="Delete conversation"
+                  onClick={(event) => remove(thread.id, event)}
+                  className="flex-none p-0.5 text-slate-600 opacity-0 transition hover:text-red-400 group-hover:opacity-100"
+                >
+                  <Trash2 size={13} strokeWidth={1.8} />
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Sidebar({ tenant, isAdmin, user, onOpenAccount, onSignOut }) {
+  const navigate = useNavigate();
   // D-089: the prototype asserted "All systems operational" unconditionally,
   // which is a claim the UI is in no position to make. This reads the real
   // aggregate, and says "unavailable" rather than "fine" when it cannot.
@@ -106,6 +191,19 @@ function Sidebar({ tenant, isAdmin }) {
         </div>
       </div>
 
+      {/* Primary action, above the navigation - the thing people come here to
+          do, not a page they navigate to. */}
+      <div className="mb-4 px-3.5">
+        <button
+          type="button"
+          onClick={() => navigate("/app/chat")}
+          className="flex w-full items-center justify-center gap-2 rounded-none bg-emerald-600 px-3.5 py-2.5 text-[13px] font-semibold text-white transition hover:bg-emerald-700"
+        >
+          <Plus size={15} strokeWidth={2} />
+          New chat
+        </button>
+      </div>
+
       <div className="px-5 pb-2.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-600">
         Menu
       </div>
@@ -137,21 +235,36 @@ function Sidebar({ tenant, isAdmin }) {
         })}
       </nav>
 
-      <div className="mt-auto px-3.5 pb-4 pt-4">
-        <div className="rounded-none border border-slate-800 bg-ink2 p-3.5">
+      <Recents />
+
+      <div className="mt-auto flex-none border-t border-slate-800">
+        <div className="px-5 py-3">
           <div
-            className={`flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] ${health.text}`}
+            className={`flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.1em] ${health.text}`}
           >
             <span className={`h-[7px] w-[7px] rounded-none ${health.dot}`} />
             {health.label}
           </div>
+        </div>
+
+        {/* The account lives at the foot of the rail, where every other chat
+            product puts it, rather than in the top-right of a header the chat
+            page barely uses. */}
+        <div className="border-t border-slate-800 px-3.5 py-3">
+          <ProfileMenu
+            user={user}
+            subtitle={user?.job_title}
+            tone="dark"
+            onOpenAccount={onOpenAccount}
+            onSignOut={onSignOut}
+          />
         </div>
       </div>
     </aside>
   );
 }
 
-function Header({ crumb, tenant, user, onOpenAccount, onSignOut }) {
+function Header({ crumb, tenant }) {
   const navigate = useNavigate();
 
   return (
@@ -184,13 +297,6 @@ function Header({ crumb, tenant, user, onOpenAccount, onSignOut }) {
           <Bell size={17} strokeWidth={1.8} className="text-slate-700" />
           <span className="absolute -right-px -top-px h-[7px] w-[7px] rounded-none bg-emerald-600" />
         </button>
-        <div className="h-7 w-px bg-hairline" />
-        <ProfileMenu
-          user={user}
-          subtitle={user?.job_title}
-          onOpenAccount={onOpenAccount}
-          onSignOut={onSignOut}
-        />
       </div>
     </header>
   );
@@ -215,15 +321,18 @@ function PortalShell() {
 
   return (
     <div className="grid min-h-screen grid-cols-1 bg-slate-100 lg:grid-cols-[260px_1fr]">
-      <Sidebar tenant={tenant} isAdmin={isAdmin} />
+      <Sidebar
+        tenant={tenant}
+        isAdmin={isAdmin}
+        user={user}
+        onOpenAccount={() => navigate("/app/account")}
+        onSignOut={onSignOut}
+      />
 
       <div className="flex min-w-0 flex-col">
         <Header
           crumb={active?.crumb ?? "Dashboard"}
           tenant={tenant}
-          user={user}
-          onOpenAccount={() => navigate("/app/account")}
-          onSignOut={onSignOut}
         />
         <Outlet />
       </div>
@@ -251,7 +360,9 @@ function PortalShell() {
 export default function PortalLayout() {
   return (
     <PortalProvider>
+      <ConversationsProvider>
       <PortalShell />
+      </ConversationsProvider>
     </PortalProvider>
   );
 }
