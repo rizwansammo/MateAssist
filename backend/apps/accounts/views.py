@@ -17,9 +17,16 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from apps.audit.models import Level, record
 from apps.tenancy.models import Membership, Role
 
-from .serializers import LoginSerializer, SessionSerializer, UserSerializer
+from .serializers import (
+    AccountUpdateSerializer,
+    LoginSerializer,
+    PasswordChangeSerializer,
+    SessionSerializer,
+    UserSerializer,
+)
 
 
 def _set_refresh_cookie(response, refresh) -> None:
@@ -160,3 +167,78 @@ class MeView(APIView):
                 ),
             }
         )
+
+
+class AccountView(APIView):
+    """Your own profile: read it, edit it (D-158).
+
+    Scoped to request.user throughout. There is no id in the URL and no way to
+    name another account, so this endpoint cannot be turned into a way to read
+    or edit somebody else's - the absence of the parameter is the control.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(responses={200: UserSerializer})
+    def get(self, request):
+        return Response(UserSerializer(request.user).data)
+
+    @extend_schema(request=AccountUpdateSerializer, responses={200: UserSerializer})
+    def patch(self, request):
+        serializer = AccountUpdateSerializer(data=request.data, context={"user": request.user})
+        serializer.is_valid(raise_exception=True)
+        changes = dict(serializer.validated_data)
+        changes.pop("current_password", None)
+
+        user = request.user
+        email_changed = "email" in changes and changes["email"] != user.email
+
+        for field, value in changes.items():
+            setattr(user, field, value)
+        user.save(update_fields=list(changes) or None)
+
+        if email_changed:
+            # AUTH level: this changes how the account signs in, and it is the
+            # first thing to look at if someone later reports being locked out.
+            record(
+                "account.email_changed",
+                tenant=getattr(request, "tenant", None),
+                actor=user,
+                level=Level.AUTH,
+                target=user.email,
+                ip=_client_ip(request),
+            )
+
+        return Response(UserSerializer(user).data)
+
+
+class PasswordChangeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(request=PasswordChangeSerializer, responses={204: None})
+    def post(self, request):
+        serializer = PasswordChangeSerializer(data=request.data, context={"user": request.user})
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        user.set_password(serializer.validated_data["new_password"])
+        user.save(update_fields=["password"])
+
+        record(
+            "account.password_changed",
+            tenant=getattr(request, "tenant", None),
+            actor=user,
+            level=Level.AUTH,
+            target=user.email,
+            ip=_client_ip(request),
+        )
+        # The caller's own access token stays valid deliberately: signing
+        # somebody out of the tab where they just changed their password reads
+        # as the change having failed. Other sessions are a separate concern and
+        # would need refresh-token revocation, which is not what was asked for.
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+def _client_ip(request) -> str:
+    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    return (forwarded.split(",")[0] if forwarded else request.META.get("REMOTE_ADDR", "")).strip()

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowRight } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Wordmark } from "@mateassist/ui";
+import { baseDomain } from "../lib/domain.js";
 
 import { useAuth } from "../context/AuthContext.jsx";
 
@@ -128,7 +129,7 @@ export default function LoginPage() {
                   className="min-w-0 flex-1 rounded-none border-0 bg-transparent px-3.5 py-3 text-sm text-slate-600"
                 />
                 <span className="flex items-center rounded-none border-l border-hairline bg-slate-100 px-3.5 font-mono text-[13px] text-slate-500">
-                  .mateassist.io
+                  .{baseDomain()}
                 </span>
               </div>
             </label>

@@ -63,6 +63,19 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  // Re-read the session after the user edits their own profile. The header
+  // renders the name, initials and email from this object, so without it a
+  // rename appears not to have worked until the next full page load.
+  const refresh = useCallback(async () => {
+    try {
+      setSession(await api.me());
+    } catch {
+      // A failed refresh must not sign anyone out. The save that triggered it
+      // already succeeded; a stale header is a much smaller problem than
+      // dropping someone's session because a follow-up request failed.
+    }
+  }, []);
+
   const value = useMemo(
     () => ({
       session,
@@ -72,9 +85,10 @@ export function AuthProvider({ children }) {
       role: session?.role ?? null,
       isAuthenticated: status === "authenticated",
       login,
-      logout
+      logout,
+      refresh
     }),
-    [session, status, login, logout]
+    [session, status, login, logout, refresh]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

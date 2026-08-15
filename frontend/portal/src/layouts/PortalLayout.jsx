@@ -5,6 +5,8 @@ import { Toast, Wordmark } from "@mateassist/ui";
 
 import { useAuth } from "../context/AuthContext.jsx";
 import { PortalProvider, usePortal } from "../context/PortalContext.jsx";
+import { ProfileMenu } from "../components/ProfileMenu.jsx";
+import { workspaceHost } from "../lib/domain.js";
 import { api } from "../lib/api.js";
 
 // "My Tickets" is gone with A-008: there is no ticket table, and a nav item
@@ -83,7 +85,7 @@ function Sidebar({ tenant, isAdmin }) {
             {tenant?.name ?? "Workspace"}
           </div>
           <div className="truncate font-mono text-[10px] text-slate-500">
-            {tenant?.slug ? `${tenant.slug}.mateassist.io` : ""}
+            {workspaceHost(tenant?.slug)}
           </div>
         </div>
       </div>
@@ -133,7 +135,7 @@ function Sidebar({ tenant, isAdmin }) {
   );
 }
 
-function Header({ crumb, tenant, user, onSignOut }) {
+function Header({ crumb, tenant, user, onOpenAccount, onSignOut }) {
   const navigate = useNavigate();
 
   return (
@@ -167,23 +169,12 @@ function Header({ crumb, tenant, user, onSignOut }) {
           <span className="absolute -right-px -top-px h-[7px] w-[7px] rounded-none bg-emerald-600" />
         </button>
         <div className="h-7 w-px bg-hairline" />
-        <button
-          type="button"
-          onClick={onSignOut}
-          title="Sign out"
-          className="flex items-center gap-2.5 rounded-none border border-transparent p-1 pr-1.5 transition hover:border-hairline hover:bg-slate-50"
-        >
-          <div className="flex h-[30px] w-[30px] items-center justify-center rounded-none bg-teal-700 text-xs font-semibold text-white">
-            {user?.initials ?? "?"}
-          </div>
-          <div className="hidden text-left sm:block">
-            <div className="text-[13px] font-medium leading-tight text-ink">
-              {user?.display_name ?? user?.email}
-            </div>
-            <div className="text-[11px] leading-tight text-slate-500">{user?.job_title || ""}</div>
-          </div>
-          <ChevronDown size={14} className="text-slate-400" />
-        </button>
+        <ProfileMenu
+          user={user}
+          subtitle={user?.job_title}
+          onOpenAccount={onOpenAccount}
+          onSignOut={onSignOut}
+        />
       </div>
     </header>
   );
@@ -215,6 +206,7 @@ function PortalShell() {
           crumb={active?.crumb ?? "Dashboard"}
           tenant={tenant}
           user={user}
+          onOpenAccount={() => navigate("/app/account")}
           onSignOut={onSignOut}
         />
         <Outlet />

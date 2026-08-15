@@ -2,6 +2,7 @@ import { BarChart3, Building2, KeyRound, LayoutDashboard, ScrollText, ShieldChec
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Toast } from "@mateassist/ui";
 
+import { ProfileMenu } from "../components/ProfileMenu.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { AdminProvider, useAdmin } from "../context/AdminContext.jsx";
 
@@ -96,24 +97,7 @@ function Header({ crumb, user, role, onSignOut }) {
         <span className="truncate text-sm font-semibold text-white">{crumb}</span>
       </div>
       <div className="ml-auto flex flex-none items-center gap-3">
-        <button
-          type="button"
-          onClick={onSignOut}
-          title="Sign out"
-          className="flex items-center gap-2.5 rounded-none border border-transparent p-1 pr-1.5 transition hover:border-slate-800 hover:bg-[#0F1B2D]"
-        >
-          <div className="flex h-[30px] w-[30px] items-center justify-center rounded-none bg-emerald-500 text-xs font-bold text-emerald-950">
-            {user?.initials ?? "?"}
-          </div>
-          <div className="hidden text-left sm:block">
-            <div className="text-[13px] font-medium leading-tight text-white">
-              {user?.display_name ?? user?.email}
-            </div>
-            <div className="font-mono text-[11px] leading-tight text-slate-500">
-              {(role ?? "").toLowerCase().replace("_", "-")}
-            </div>
-          </div>
-        </button>
+        <ProfileMenu user={user} role={role} onSignOut={onSignOut} />
       </div>
     </header>
   );

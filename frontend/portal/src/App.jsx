@@ -6,6 +6,7 @@ import { AuthProvider } from "./context/AuthContext.jsx";
 import PortalLayout from "./layouts/PortalLayout.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
+import AccountPage from "./pages/AccountPage.jsx";
 import ChatPage from "./pages/ChatPage.jsx";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
@@ -19,6 +20,7 @@ export default function App() {
         <Route element={<RequireAuth />}>
           <Route path="/app" element={<PortalLayout />}>
             <Route index element={<DashboardPage />} />
+            <Route path="account" element={<AccountPage />} />
             <Route path="chat" element={<ChatPage />} />
             {/* D-142: the open thread lives in the URL, so a refresh or a back
                 button returns to it instead of silently starting a new one. */}
