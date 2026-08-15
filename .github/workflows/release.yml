@@ -1,18 +1,25 @@
-# Build and publish the three production images to GHCR.
+# Build the three production images, then deploy them.
 #
-# Triggered by a version tag, or manually. Deliberately NOT on every push to
-# main: an image per commit fills the registry with builds nobody deployed, and
-# makes "which image is live?" a question with a fuzzy answer.
+# Runs on every push to main. Version tags still work and still produce a
+# tagged image - they now MARK a release rather than cause one.
 #
-# Deployment is a separate, manual step on the VPS. That is a choice, not an
-# omission - see docs/DEPLOY.md. A push-to-deploy pipeline on a box that also
-# runs three other people-facing apps means one bad merge takes them all down
-# with it.
+# This used to build only on a tag and stop there, with the deploy done by hand
+# over SSH. The stated reason was that a tag is a deliberate "this is ready"
+# moment. In practice every push was followed by someone manually creating a
+# tag and then manually running the same four commands on the server, so the
+# moment bought nothing and the pipeline was simply unfinished.
+#
+# The tradeoff that IS real: a bad migration now reaches production before
+# anyone looks at it. Migrations are exercised in CI, there is one backend
+# container, and the deploy job verifies the site after restarting - so the
+# failure is loud rather than silent. Undo is a reverse migration, not a
+# withheld deploy.
 
 name: release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -85,7 +92,11 @@ jobs:
             VERSION="${GITHUB_REF_NAME}"
           else
             VERSION="${{ inputs.tag }}"
-            [ -n "$VERSION" ] || VERSION="${GITHUB_SHA}"
+            # Short SHA, and the deploy job derives the same value the same
+            # way. They were the full 40 characters here and 7 there, so a
+            # push-built image existed under a tag the deploy would never ask
+            # for - a pull failure at the last step of an otherwise good run.
+            [ -n "$VERSION" ] || VERSION="${GITHUB_SHA::7}"
           fi
           # Both a moving `latest` and an immutable version tag. The compose file
           # defaults to latest for convenience; pin the version tag in .env when
@@ -110,3 +121,95 @@ jobs:
 
       - name: Summary
         run: echo "Published ${{ steps.tags.outputs.image }}" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Deploy ───────────────────────────────────────────────────────────────────
+  #
+  # Only after all three images exist. `needs: build` with fail-fast off on the
+  # matrix means a partial build still fails this job: deploying two of three
+  # images gives a portal talking to a backend from a different commit.
+  deploy:
+    name: Deploy to production
+    needs: build
+    runs-on: ubuntu-latest
+    # A build triggered by anything other than a push to main or a version tag
+    # is someone testing the pipeline, and must not reach the server.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Work out which tag to deploy
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          # Pinned host key, not StrictHostKeyChecking=no. Accepting whatever
+          # key answers would hand this deploy - and the private key it carries
+          # - to anything that could win a race for that address.
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy "${USER}@${HOST}" bash -s <<EOF
+          set -euo pipefail
+          cd /opt/MateAssist
+
+          # Rewrite only MateAssist's own image tags. Three other people-facing
+          # apps share this box and must not be touched by this deploy.
+          sed -i -E "s|(ghcr.io/rizwansammo/mateassist-[a-z]+):[^[:space:]]+|\1:${TAG}|g" .env
+          grep '_IMAGE=' .env
+
+          docker compose pull backend portal admin
+
+          # --no-build: the compose file carries build sections for local use,
+          # and a missing image must fail loudly rather than have the server try
+          # to build from source it does not have.
+          docker compose up -d --no-build backend portal admin celery_worker celery_beat
+
+          # --database=admin: the default connection is the deliberately
+          # under-privileged RLS role and cannot alter tables. A bare migrate
+          # fails with "must be owner of table".
+          docker compose exec -T backend python manage.py migrate --database=admin
+          EOF
+
+      - name: Verify the site is actually up
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          # From the server, so this tests the app rather than the internet.
+          # Containers need a moment after restart; a single immediate curl
+          # would report a healthy deploy as broken.
+          ssh -i ~/.ssh/deploy "${USER}@${HOST}" bash -s <<'EOF'
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            ok=1
+            for url in https://mateassist.site/                        https://mateassist.site/platform_admin/                        https://netamate.mateassist.site/                        https://netamate.mateassist.site/api/v1/health/; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' "$url" || echo 000)
+              echo "  $code  $url"
+              [ "$code" = "200" ] || ok=0
+            done
+            [ "$ok" = "1" ] && { echo "All endpoints healthy."; exit 0; }
+            echo "attempt $attempt: not ready yet"
+            sleep 6
+          done
+          echo "Deploy finished but the site is not answering 200."
+          docker compose -f /opt/MateAssist/docker-compose.yml logs --tail=40 backend
+          exit 1
+          EOF
+
+      - name: Summary
+        run: |
+          echo "Deployed ${{ steps.version.outputs.tag }} to production" >> "$GITHUB_STEP_SUMMARY"

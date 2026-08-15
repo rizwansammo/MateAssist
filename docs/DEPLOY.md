@@ -109,9 +109,24 @@ docker compose -f docker-compose.prod.yml --env-file .env pull
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
-**Deployment is manual on purpose.** MateServer runs three other applications
-that people rely on; a push-to-deploy pipeline means one bad merge can take them
-all down while nobody is watching.
+**Deployment is automatic.** A push to `main` builds the three images and
+deploys them: the `.env` image tags are rewritten to the new build, the
+containers are pulled and restarted, migrations run on the `admin` connection,
+and the four public endpoints are polled until they answer 200 - the job fails
+and prints the backend log if they do not.
+
+The commands above are the manual equivalent, kept for a rollback or when the
+pipeline itself is broken.
+
+This page previously claimed manual deployment was a deliberate safeguard,
+because MateServer also runs three other people-facing applications. That
+concern is real but the safeguard was not: the deploy only ever touched
+MateAssist's own compose project, and the tag rewrite is scoped by a regex to
+`mateassist-*` images. The honest reason it was manual is that it was never
+finished after the first deploy.
+
+Version tags still work and still produce a tagged image. They now MARK a
+release rather than cause one.
 
 ### Migrations
 
