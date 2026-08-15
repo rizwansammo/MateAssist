@@ -17,6 +17,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.ai.models import Engine, ModelPrice, ProviderKey
+from apps.ai.probe import check_key
 from apps.audit.models import AuditEvent, Level, record
 from apps.metering import rollups
 from apps.metering.models import TenantBudget
@@ -26,6 +27,8 @@ from apps.tenancy.models import Tenant
 from .permissions import IsPlatformOwner
 from .serializers import (
     ModelPriceSerializer,
+    ProviderKeyCheckSerializer,
+    ProviderKeyConfigSerializer,
     ProviderKeySerializer,
     ProviderKeyWriteSerializer,
     TenantSerializer,
@@ -41,7 +44,10 @@ class ProviderKeyViewSet(viewsets.ModelViewSet):
     queryset = ProviderKey.objects.all()
     serializer_class = ProviderKeySerializer
     permission_classes = [IsPlatformOwner]
-    http_method_names = ["get", "post", "delete"]  # rotation is an explicit action
+    # PATCH edits configuration only. Replacing the credential stays on the
+    # explicit rotate action, so "fix the model id" can never become "overwrite
+    # the key" by accident, and the audit log says which one happened (D-155).
+    http_method_names = ["get", "post", "patch", "delete"]
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -81,6 +87,85 @@ class ProviderKeyViewSet(viewsets.ModelViewSet):
             last4=key.last4,
         )
         return Response(ProviderKeySerializer(key).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(request=ProviderKeyConfigSerializer, responses={200: ProviderKeySerializer})
+    def partial_update(self, request, *args, **kwargs):
+        """Change a key's configuration in place.
+
+        Exists because providers retire model ids. Without it the only way to
+        point at a working model was deleting the key and re-entering the
+        credential - friction that ends with an operator leaving it broken.
+        """
+        key = self.get_object()
+        payload = ProviderKeyConfigSerializer(data=request.data, context={"key": key})
+        payload.is_valid(raise_exception=True)
+        changes = payload.validated_data
+
+        before = {field: getattr(key, field) for field in changes}
+
+        # The label is part of the vault's additional authenticated data
+        # (`providerkey:{engine}:{label}`), so renaming a key would leave its
+        # ciphertext undecryptable forever - a silent, unrecoverable loss of a
+        # credential nobody could read back to re-enter. Unseal under the old
+        # context and re-seal under the new one, in that order.
+        renaming = "label" in changes and changes["label"] != key.label
+        secret = key.reveal() if renaming else None
+
+        for field, value in changes.items():
+            setattr(key, field, value)
+
+        if renaming:
+            key.set_secret(secret)
+
+        # A key parked in cooldown or rate-limited is usually parked BECAUSE of
+        # the setting just corrected, so an edit clears that state. Revoked is
+        # left alone: that was a deliberate act and undoing it silently would
+        # bring a retired credential back to life.
+        if key.status == ProviderKey.Status.RATE_LIMITED:
+            key.status = ProviderKey.Status.ACTIVE
+        key.cooldown_until = None
+        key.save()
+
+        record(
+            "vault.reconfigure",
+            actor=request.user,
+            level=Level.AUTH,
+            target=str(key),
+            ip=_client_ip(request),
+            engine=key.engine,
+            label=key.label,
+            # What changed, never the credential - it cannot change on this path.
+            changed=sorted(changes),
+            before={k: str(v) for k, v in before.items()},
+            after={k: str(v) for k, v in changes.items()},
+        )
+        return Response(ProviderKeySerializer(key).data)
+
+    @extend_schema(responses={200: ProviderKeyCheckSerializer})
+    @action(detail=True, methods=["post"])
+    def check(self, request, pk=None):
+        """Prove the key works with one real provider call (D-155).
+
+        A saved key proves nothing: the credential can be valid while the model
+        id is retired. Returns 200 either way - a working endpoint correctly
+        reporting a broken configuration is not itself an error, and an HTTP
+        failure code here would be indistinguishable from the request failing.
+        """
+        key = self.get_object()
+        result = check_key(key)
+
+        record(
+            "vault.check",
+            actor=request.user,
+            level=Level.AUTH,
+            target=str(key),
+            ip=_client_ip(request),
+            engine=key.engine,
+            label=key.label,
+            ok=result["ok"],
+            detail=result["detail"][:200],
+        )
+        return Response(result)
 
     @extend_schema(request=ProviderKeyWriteSerializer, responses={200: ProviderKeySerializer})
     @action(detail=True, methods=["post"])

@@ -91,6 +91,69 @@ class ProviderKeyWriteSerializer(serializers.Serializer):
         return attrs
 
 
+class ProviderKeyCheckSerializer(serializers.Serializer):
+    """The result of a live probe. Documented so the schema is not a bare dict."""
+
+    ok = serializers.BooleanField()
+    model = serializers.CharField()
+    detail = serializers.CharField()
+
+
+class ProviderKeyConfigSerializer(serializers.Serializer):
+    """Edit a key's configuration in place, without re-entering the credential.
+
+    Deliberately has no `secret` field. Changing a credential and changing the
+    model it points at are different acts with different risk: one replaces an
+    authenticated identity, the other corrects a string. Keeping them apart
+    means a routine model correction cannot become an accidental key overwrite,
+    and the audit log records which one actually happened.
+
+    The immediate reason this exists: providers retire model names. When Google
+    withdrew gemini-1.5-flash the only route to a working model was deleting the
+    key and re-entering the credential, which is the kind of friction that ends
+    with an operator leaving something broken.
+
+    `engine` is absent on purpose. A key's role is fixed at creation - a text
+    credential silently becoming the vision engine would break the contract that
+    text engines never receive images (A-010).
+    """
+
+    provider = serializers.ChoiceField(choices=Provider.choices, required=False)
+    base_url = serializers.CharField(required=False, allow_blank=True)
+    model = serializers.CharField(required=False, allow_blank=True, max_length=64)
+    label = serializers.CharField(required=False, max_length=64)
+    weight = serializers.IntegerField(required=False, min_value=1, max_value=100)
+    daily_quota = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+
+    def validate(self, attrs):
+        """Validate the RESULT of the edit, not the fields that arrived.
+
+        A partial update carries only what changed, so checking the payload
+        alone would let `provider` move to a generic endpoint while the existing
+        blank base_url stays blank - saving cleanly and failing on the first
+        real request.
+        """
+        key = self.context["key"]
+        provider = attrs.get("provider", key.provider)
+        base_url = attrs.get("base_url", key.base_url)
+        model = attrs.get("model", key.model)
+        defaults = PROVIDER_DEFAULTS.get(provider, {})
+
+        if not base_url and not defaults.get("base_url"):
+            raise serializers.ValidationError(
+                {"base_url": "A base URL is required for a generic OpenAI-compatible endpoint."}
+            )
+
+        default_model = defaults.get(
+            "vision_model" if key.engine == Engine.VISION else "text_model"
+        )
+        if not model and not default_model:
+            raise serializers.ValidationError(
+                {"model": f"A model id is required - {provider} has no default for {key.engine}."}
+            )
+        return attrs
+
+
 class TenantSerializer(serializers.ModelSerializer):
     """The workspace registry, for the platform Tenants screen.
 

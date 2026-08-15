@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight, Lock, Plus, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  Lock,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  XCircle
+} from "lucide-react";
 import { Pill } from "@mateassist/ui";
 
+import { KeyEditModal } from "../components/KeyEditModal.jsx";
 import { KeyModal } from "../components/KeyModal.jsx";
 import { useAdmin } from "../context/AdminContext.jsx";
 import { vaultApi } from "../lib/vault.js";
@@ -21,7 +31,18 @@ import {
  * one, so the tables below can only ever show `last4` (D-072).
  */
 
-function EngineSection({ engine, keys, loading, onAdd, onRotate, onRevoke, onPurge }) {
+function EngineSection({
+  engine,
+  keys,
+  loading,
+  checks,
+  onAdd,
+  onEdit,
+  onCheck,
+  onRotate,
+  onRevoke,
+  onPurge
+}) {
   const live = keys.filter((k) => k.status !== "REVOKED");
   const active = live.filter((k) => k.is_available).length;
   const limited = live.filter((k) => k.status === "RATE_LIMITED").length;
@@ -111,6 +132,23 @@ function EngineSection({ engine, keys, loading, onAdd, onRotate, onRevoke, onPur
                   <div className="mt-0.5 font-mono text-[11.5px] text-slate-500">
                     {key.resolved_model}
                   </div>
+                  {/* The result of the last live probe. Shown against the model
+                      rather than the status column because it is a statement
+                      about the model id, not about the credential. */}
+                  {checks[key.id] && (
+                    <div
+                      className={`mt-1 flex items-start gap-1.5 text-[11.5px] ${
+                        checks[key.id].ok ? "text-emerald-700" : "text-red-700"
+                      }`}
+                    >
+                      {checks[key.id].ok ? (
+                        <CheckCircle2 size={13} className="mt-px flex-none" />
+                      ) : (
+                        <XCircle size={13} className="mt-px flex-none" />
+                      )}
+                      <span className="max-w-[380px]">{checks[key.id].detail}</span>
+                    </div>
+                  )}
                   <div className="mt-0.5 text-[11.5px] text-slate-400">
                     Added {new Date(key.created_at).toLocaleDateString("en-GB")} - quota{" "}
                     {key.daily_quota ?? "unmetered"}
@@ -139,6 +177,21 @@ function EngineSection({ engine, keys, loading, onAdd, onRotate, onRevoke, onPur
                 </td>
                 <td className="border-b border-slate-100 px-6 py-4">
                   <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onCheck(key)}
+                      disabled={checks[key.id]?.pending}
+                      className="whitespace-nowrap rounded-none border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:text-slate-400"
+                    >
+                      {checks[key.id]?.pending ? "Testing..." : "Test"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onEdit(key)}
+                      className="whitespace-nowrap rounded-none border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Edit
+                    </button>
                     <button
                       type="button"
                       onClick={() => onRotate(engine, key)}
@@ -178,6 +231,10 @@ export default function AiConfigurationPage() {
   const [keys, setKeys] = useState({ TEXT: [], VISION: [] });
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
+  const [editing, setEditing] = useState(null);
+  // Probe results, keyed by key id. Not persisted: a check tells you what the
+  // provider said a moment ago, and a stale green tick is worse than none.
+  const [checks, setChecks] = useState({});
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -212,6 +269,39 @@ export default function AiConfigurationPage() {
       await refresh();
     } catch (error) {
       notify("Save failed", describe(error), "warn");
+    }
+  };
+
+  const reconfigure = async (fields) => {
+    try {
+      await vaultApi.reconfigure(editing.id, fields);
+      notify("Key updated", `${fields.label} saved - audit event written`);
+      setEditing(null);
+      // A previous result described the old configuration, so it is no longer
+      // true about this key.
+      setChecks((prev) => ({ ...prev, [editing.id]: null }));
+      await refresh();
+    } catch (error) {
+      notify("Update failed", describe(error), "warn");
+    }
+  };
+
+  const check = async (key) => {
+    setChecks((prev) => ({ ...prev, [key.id]: { pending: true } }));
+    try {
+      const result = await vaultApi.check(key.id);
+      setChecks((prev) => ({ ...prev, [key.id]: result }));
+      if (result.ok) {
+        notify("Key works", `${result.model} responded`);
+      } else {
+        // The provider's own words. Opposite of the rule for chat (D-135) and
+        // correct here: the reader is the platform owner debugging their own
+        // configuration, and "model not found" IS the answer.
+        notify("Key failed", result.detail, "warn");
+      }
+    } catch (error) {
+      setChecks((prev) => ({ ...prev, [key.id]: { ok: false, detail: describe(error) } }));
+      notify("Test failed", describe(error), "warn");
     }
   };
 
@@ -264,7 +354,10 @@ export default function AiConfigurationPage() {
           engine={engine}
           keys={keys[engine.id] ?? []}
           loading={loading}
+          checks={checks}
           onAdd={(e) => setModal({ engine: e, existingKey: null })}
+          onEdit={setEditing}
+          onCheck={check}
           onRotate={(e, key) => setModal({ engine: e, existingKey: key })}
           onRevoke={revoke}
           onPurge={purge}
@@ -305,6 +398,14 @@ export default function AiConfigurationPage() {
           existingKey={modal.existingKey}
           onClose={() => setModal(null)}
           onSave={save}
+        />
+      )}
+
+      {editing && (
+        <KeyEditModal
+          apiKey={editing}
+          onClose={() => setEditing(null)}
+          onSave={reconfigure}
         />
       )}
     </main>

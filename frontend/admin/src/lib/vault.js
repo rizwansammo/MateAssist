@@ -36,6 +36,20 @@ export const vaultApi = {
       body: { provider, base_url, model, label, secret }
     }),
 
+  // Change configuration without re-entering the credential (D-155).
+  //
+  // Distinct from rotate on purpose. Correcting a model id and replacing a
+  // credential are different acts with different risk, and providers retire
+  // model names often enough that "delete the key and type the secret again"
+  // was the wrong price to pay for a one-word fix.
+  reconfigure: (id, fields) =>
+    apiFetch(`/platform/keys/${id}/`, { method: "PATCH", body: fields }),
+
+  // One real provider call. A saved key proves nothing on its own: the
+  // credential can be valid while the model id is retired, and the first sign
+  // of trouble is otherwise a user's failed request.
+  check: (id) => apiFetch(`/platform/keys/${id}/check/`, { method: "POST" }),
+
   revoke: (id) => apiFetch(`/platform/keys/${id}/revoke/`, { method: "POST" }),
   purge: (id) => apiFetch(`/platform/keys/${id}/`, { method: "DELETE" }),
 

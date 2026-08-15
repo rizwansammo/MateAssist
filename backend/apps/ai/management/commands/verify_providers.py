@@ -21,41 +21,11 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from apps.ai.models import Engine, ProviderKey
+from apps.ai.probe import probe_png
 
-
-def _probe_png(size: int = 96) -> bytes:
-    """A real 96x96 image with visible structure.
-
-    Not a 1x1 pixel: the Gemini 3.x models reject a degenerate image with
-    "Unable to process input image", which reads exactly like a broken model id
-    and sent the first run of this command chasing the wrong problem.
-    """
-    import struct
-    import zlib
-
-    rows = []
-    for y in range(size):
-        row = bytearray([0])  # PNG filter byte
-        for x in range(size):
-            on_cross = abs(x - size // 2) < 6 or abs(y - size // 2) < 6
-            value = 0 if on_cross else 255
-            row += bytes([value, value, value])
-        rows.append(bytes(row))
-
-    def chunk(tag: bytes, data: bytes) -> bytes:
-        return (
-            struct.pack(">I", len(data))
-            + tag
-            + data
-            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-        )
-
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(b"".join(rows)))
-        + chunk(b"IEND", b"")
-    )
+# The image generator lives in apps.ai.probe now, shared with the admin
+# "Test this key" button so both prove the same thing the same way.
+_probe_png = probe_png
 
 
 class Command(BaseCommand):
