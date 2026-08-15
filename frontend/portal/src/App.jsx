@@ -8,6 +8,7 @@ import LoginPage from "./pages/LoginPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import ChatPage from "./pages/ChatPage.jsx";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage.jsx";
+import SettingsPage from "./pages/SettingsPage.jsx";
 
 export default function App() {
   return (
@@ -29,6 +30,11 @@ export default function App() {
                 regardless; this keeps them from landing on a broken page. */}
             <Route path="knowledge" element={<RequireTenantAdmin />}>
               <Route index element={<KnowledgeBasePage />} />
+            </Route>
+            {/* Administrator-only (D-151). The instructions shape every answer
+                the workspace receives, so they are not end-user settings. */}
+            <Route path="settings" element={<RequireTenantAdmin />}>
+              <Route index element={<SettingsPage />} />
             </Route>
           </Route>
         </Route>

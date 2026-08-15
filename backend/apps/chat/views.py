@@ -119,6 +119,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             question=user_message.text,
             hits=grounded,
             attachment_description=attachment_description,
+            workspace_instructions=request.tenant.assistant_instructions,
         )
 
         try:
@@ -184,6 +185,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             question=user_message.text,
             hits=grounded,
             attachment_description=attachment_description,
+            workspace_instructions=tenant.assistant_instructions,
         )
         citations = [hit.citation for hit in citable]
 

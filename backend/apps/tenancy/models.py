@@ -18,6 +18,11 @@ class Role(models.TextChoices):
     END_USER = "END_USER", "End user"
 
 
+# Roughly 500 words. Enough for real policy, small enough that it cannot quietly
+# become the dominant cost of every question the workspace asks.
+ASSISTANT_INSTRUCTIONS_MAX = 4000
+
+
 class Plan(models.TextChoices):
     GROWTH = "GROWTH", "Growth"
     PRO = "PRO", "Pro"
@@ -46,6 +51,33 @@ class Tenant(models.Model):
     support_email = models.EmailField(
         blank=True, help_text="Escalations are emailed here. Falls back to the platform default."
     )
+
+    # Free-text workspace instructions, written by the tenant's own administrator
+    # and injected into every prompt below the core rules (D-151).
+    #
+    # This is the policy a runbook cannot express: "we use Entra ID, not on-prem
+    # AD", "never tell a user to reset their own password, send them to the
+    # portal", "outside 9-6 GMT say the L2 team replies next working day".
+    #
+    # Trust level matters here. Retrieved runbook text is untrusted data (D-130)
+    # because anyone who can upload a file can write it. This is deliberate
+    # configuration by an authenticated administrator of that workspace - so it
+    # is trusted, but BOUNDED: the prompt ranks it below the core rules and
+    # states that it cannot switch off grounding, honesty about not knowing, or
+    # escalation. A tenant may shape how the assistant speaks; not whether it
+    # tells the truth.
+    #
+    # The cap is small on purpose. This text rides in EVERY request, so it is a
+    # permanent per-question token cost, not a one-off.
+    assistant_instructions = models.TextField(
+        blank=True,
+        max_length=ASSISTANT_INSTRUCTIONS_MAX,
+        help_text=(
+            "Workspace-specific guidance for the assistant: tools you use, local "
+            "policy, house style. Cannot override grounding or escalation."
+        ),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
