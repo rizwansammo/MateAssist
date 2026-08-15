@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Bot, Check, Mail, MessageSquare, Plus, Trash2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
+import { AnswerBody } from "../components/AnswerBody.jsx";
 import { ChatComposer } from "../components/ChatComposer.jsx";
 import { usePortal } from "../context/PortalContext.jsx";
 import { chatApi } from "../lib/chat.js";
@@ -328,11 +329,11 @@ export default function ChatPage() {
               <div className="flex h-[30px] w-[30px] flex-none items-center justify-center rounded-none bg-ink">
                 <Bot size={16} strokeWidth={1.8} className="text-emerald-400" />
               </div>
+              {/* Rendered as Markdown while it streams, so the answer does not
+                  visibly reflow when the persisted copy replaces it. */}
               <div className="max-w-[680px] rounded-none border border-hairline bg-white p-4">
-                <p className="whitespace-pre-wrap text-[14.5px] leading-relaxed text-slate-800">
-                  {streaming}
-                  <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-emerald-500 align-middle" />
-                </p>
+                <AnswerBody text={streaming} />
+                <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-emerald-500 align-middle" />
               </div>
             </div>
           )}
@@ -379,13 +380,16 @@ function MessageBubble({ message, onEscalate, onRate }) {
           isAi ? "border-hairline bg-white" : "border-ink bg-ink"
         }`}
       >
-        <p
-          className={`whitespace-pre-wrap text-[14.5px] leading-relaxed text-pretty ${
-            isAi ? "text-slate-800" : "text-slate-100"
-          }`}
-        >
-          {message.text}
-        </p>
+        {isAi ? (
+          <AnswerBody text={message.text} />
+        ) : (
+          // The user's own words, shown literally. Rendering their message as
+          // Markdown would let a stray asterisk change what they appear to
+          // have said.
+          <p className="whitespace-pre-wrap text-[14.5px] leading-relaxed text-pretty text-slate-100">
+            {message.text}
+          </p>
+        )}
 
         {message.attachment_description && (
           <div className="mt-3 rounded-none border border-slate-700 bg-ink2 p-3">

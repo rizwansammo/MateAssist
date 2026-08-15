@@ -325,3 +325,19 @@ def test_the_escalation_route_must_come_from_the_document():
 def test_a_met_escalation_criterion_beats_restarting_the_procedure():
     system = flattened()
     assert "escalate rather than starting the procedure again" in system
+
+
+def test_the_prompt_asks_for_scannable_formatting():
+    """D-152: the answer is read at a broken machine, not in an armchair.
+
+    This rule and the Markdown renderer in the portal only make sense together -
+    without the renderer the markers appear literally, and asterisks scattered
+    through an answer are worse than plain prose.
+    """
+    system = flattened()
+
+    assert "format for scanning, not for reading" in system
+    assert "vertical numbered markdown list" in system
+    assert "never run steps together inside a paragraph" in system
+    assert "`backticks`" in system
+    assert "fenced code block" in system
