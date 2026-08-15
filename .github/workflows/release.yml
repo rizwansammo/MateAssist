@@ -135,6 +135,18 @@ jobs:
     # is someone testing the pipeline, and must not reach the server.
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
 
+    # `actions: read` is what lets the gate below read CI's conclusion. The
+    # repository's default token permission is contents-only, so querying the
+    # Actions API returned "403 Resource not accessible by integration" - the
+    # gate failed closed, correctly, for a reason that had nothing to do with
+    # the tests.
+    #
+    # Nothing here can write. A job that can reach production should be able to
+    # observe CI and read the repo, and do neither of them any harm.
+    permissions:
+      actions: read
+      contents: read
+
     steps:
       # Both workflows are triggered by the same push and run side by side, so
       # without this the deploy lands about three minutes before CI reports.
