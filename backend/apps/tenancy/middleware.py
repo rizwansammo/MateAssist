@@ -19,15 +19,49 @@ from .models import Tenant
 TENANT_EXEMPT_PREFIXES = ("/api/v1/health", "/django-admin", "/api/schema", "/api/docs")
 
 
+RESERVED_LABELS = {"admin", "www", "api", "static", "media", "mail"}
+
+
 def _subdomain(host: str) -> str | None:
-    hostname = host.split(":")[0].lower()
-    labels = hostname.split(".")
-    if len(labels) < 2:
+    """The workspace slug in this host, or None for the platform surface.
+
+    Resolved against BASE_DOMAIN rather than by counting labels (D-148).
+
+    The original implementation took the first label and called it the slug.
+    That is correct for `netamate.mateassist.site` and wrong for the apex:
+    `mateassist.site` has two labels, so it read "mateassist" as a workspace,
+    failed to find one, and returned 404 "Unknown workspace" for every request
+    to the platform surface - including the platform owner's login.
+
+    **Development could not catch this.** BASE_DOMAIN was `localhost:8000`, and
+    `localhost` is a single label, so the length check returned None and the
+    apex behaved correctly for the wrong reason. It only broke on a real domain,
+    where the apex has two labels like any other host.
+
+    An unrecognised host resolves to None rather than to a tenant, so a request
+    that somehow reaches this app on the wrong domain gets the platform surface
+    (which then refuses it) rather than a stranger's workspace.
+    """
+    from django.conf import settings
+
+    hostname = host.split(":")[0].lower().rstrip(".")
+    base = settings.BASE_DOMAIN.split(":")[0].lower().rstrip(".")
+
+    if not base or hostname == base:
         return None
-    candidate = labels[0]
-    if candidate in {"admin", "www", "api", "localhost", "127"}:
+
+    suffix = f".{base}"
+    if not hostname.endswith(suffix):
         return None
-    return candidate
+
+    label = hostname[: -len(suffix)]
+    # Reject an empty label and any deeper nesting: `a.b.mateassist.site` is not
+    # workspace "a.b", and treating it as one would let a slug contain a dot.
+    if not label or "." in label:
+        return None
+    if label in RESERVED_LABELS:
+        return None
+    return label
 
 
 class SubdomainMiddleware:
