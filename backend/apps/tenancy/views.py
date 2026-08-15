@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import BasePermission, IsAuthenticated
@@ -10,6 +11,7 @@ from rest_framework.views import APIView
 
 from apps.audit.models import Level, record
 
+from .context import platform_scope
 from .models import ASSISTANT_INSTRUCTIONS_MAX, Membership, Role
 
 
@@ -179,3 +181,139 @@ class WorkspaceMailTestView(APIView):
             detail=result["detail"][:200],
         )
         return Response(result)
+
+
+# ---------------------------------------------------------------- people ----
+
+
+class WorkspaceUserSerializer(serializers.Serializer):
+    """A member of this workspace, as their administrator sees them."""
+
+    id = serializers.IntegerField(source="user.id", read_only=True)
+    email = serializers.EmailField(source="user.email", read_only=True)
+    full_name = serializers.CharField(source="user.full_name", read_only=True)
+    job_title = serializers.CharField(source="user.job_title", read_only=True)
+    display_name = serializers.CharField(source="user.display_name", read_only=True)
+    initials = serializers.CharField(source="user.initials", read_only=True)
+    is_active = serializers.BooleanField(source="user.is_active", read_only=True)
+    last_seen_at = serializers.DateTimeField(source="user.last_seen_at", read_only=True)
+    date_joined = serializers.DateTimeField(source="user.date_joined", read_only=True)
+    role = serializers.CharField(read_only=True)
+
+
+class PasswordResetSerializer(serializers.Serializer):
+    """Optionally set the password; otherwise one is generated.
+
+    Generation is the better default and the reason the field is optional. An
+    administrator resetting twelve accounts in a morning picks something they
+    can retype, and that password is the one an attacker guesses first.
+    """
+
+    new_password = serializers.CharField(required=False, allow_blank=True, write_only=True)
+
+    def validate_new_password(self, value: str) -> str:
+        if not value:
+            return ""
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        try:
+            validate_password(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages)) from exc
+        return value
+
+
+def _generate_password() -> str:
+    """A password a human can read down a phone line without ambiguity.
+
+    `secrets`, not `random`: this is a credential, and the default generator is
+    seeded predictably enough to reconstruct. The alphabet omits characters that
+    are misread when dictated or retyped - no O/0, no l/1/I - because the first
+    thing a generated password has to survive is being communicated.
+    """
+    import secrets
+
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    return "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3))
+
+
+class WorkspaceUserListView(APIView):
+    """Everyone in this workspace (D-159).
+
+    Reads memberships rather than users: a User is global and may belong to
+    several workspaces, so listing users directly would be a way to enumerate
+    people who are none of this administrator's business.
+    """
+
+    permission_classes = [IsWorkspaceAdmin]
+
+    @extend_schema(responses={200: WorkspaceUserSerializer(many=True)})
+    def get(self, request):
+        memberships = (
+            Membership.all_objects.filter(tenant=request.tenant)
+            .select_related("user")
+            .order_by("role", "user__email")
+        )
+        return Response(WorkspaceUserSerializer(memberships, many=True).data)
+
+
+class WorkspaceUserPasswordResetView(APIView):
+    """Reset a member's password.
+
+    The target is resolved through a membership of THIS workspace, so a user id
+    belonging to another tenant simply does not resolve. Authorisation is the
+    lookup, not a check performed alongside it.
+    """
+
+    permission_classes = [IsWorkspaceAdmin]
+
+    @extend_schema(request=PasswordResetSerializer, responses={200: None})
+    def post(self, request, user_id: int):
+        membership = get_object_or_404(
+            Membership.all_objects.select_related("user"),
+            tenant=request.tenant,
+            user_id=user_id,
+        )
+        target = membership.user
+
+        # A workspace administrator must never be able to reset the password of
+        # someone who also holds platform ownership. It is the same User row, so
+        # the new password would hand them the platform console - every tenant's
+        # data and the credential vault - from an admin screen scoped to one
+        # workspace. Platform owners carry a null tenant, so they never appear in
+        # the list above; this closes the direct request.
+        # Read outside the tenant scope. Asked from inside this workspace the
+        # query returns nothing every time - RLS hides null-tenant rows - and
+        # the guard would pass for exactly the account it exists to protect.
+        with platform_scope():
+            is_platform_owner = Membership.all_objects.filter(
+                user=target, tenant__isnull=True, role=Role.PLATFORM_OWNER
+            ).exists()
+
+        if is_platform_owner:
+            return Response(
+                {"detail": "This account is managed by the platform owner."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        payload = PasswordResetSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        password = payload.validated_data.get("new_password") or _generate_password()
+        target.set_password(password)
+        target.save(update_fields=["password"])
+
+        record(
+            "workspace.password_reset",
+            tenant=request.tenant,
+            actor=request.user,
+            level=Level.AUTH,
+            target=target.email,
+            generated=not payload.validated_data.get("new_password"),
+        )
+
+        # Returned once and never stored in readable form. The administrator has
+        # to pass it on now; there is no screen that can show it again, which is
+        # the same promise the credential vault makes.
+        return Response({"password": password, "email": target.email})

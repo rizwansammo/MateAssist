@@ -7,6 +7,7 @@ import PortalLayout from "./layouts/PortalLayout.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import AccountPage from "./pages/AccountPage.jsx";
+import PeoplePage from "./pages/PeoplePage.jsx";
 import ChatPage from "./pages/ChatPage.jsx";
 import KnowledgeBasePage from "./pages/KnowledgeBasePage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
@@ -37,6 +38,11 @@ export default function App() {
                 the workspace receives, so they are not end-user settings. */}
             <Route path="settings" element={<RequireTenantAdmin />}>
               <Route index element={<SettingsPage />} />
+            </Route>
+            {/* Administrator-only (D-159). Listing colleagues and resetting
+                their passwords is workspace administration, not a setting. */}
+            <Route path="people" element={<RequireTenantAdmin />}>
+              <Route index element={<PeoplePage />} />
             </Route>
           </Route>
         </Route>

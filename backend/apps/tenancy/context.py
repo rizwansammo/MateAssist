@@ -30,3 +30,38 @@ def tenant_context(tenant_id: int | None):
         yield
     finally:
         reset_current_tenant_id(token)
+
+
+@contextmanager
+def platform_scope():
+    """Read platform-scope rows (tenant IS NULL) during a tenant request.
+
+    The RLS policy is `tenant_id = app_current_tenant_id()` while a tenant is
+    armed, so rows with a NULL tenant - platform ownership, above all - are
+    invisible from inside a workspace request. A query for them returns nothing
+    and reports it as a clean, empty, entirely believable result.
+
+    That is a dangerous shape for a SECURITY CHECK. "Is this person a platform
+    owner?" answered `no` because the row was filtered, not because it was
+    absent, and the guard it protected passed. This clears the setting for the
+    duration of the block and restores it afterwards, so such a question is
+    asked where it can actually be answered.
+
+    Same connection and same transaction, deliberately: the `admin` alias would
+    also see the row, but it is a separate session that cannot see anything the
+    current transaction has not committed.
+    """
+    from django.db import connection
+
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT app_current_tenant_id()")
+        previous = cursor.fetchone()[0]
+        cursor.execute("SELECT set_config('app.tenant_id', '', true)")
+    try:
+        yield
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT set_config('app.tenant_id', %s, true)",
+                ["" if previous is None else str(previous)],
+            )

@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { Bot, BookOpen, Bell, ChevronDown, LayoutDashboard, Search, Settings } from "lucide-react";
+import {
+  Bot,
+  BookOpen,
+  Bell,
+  ChevronDown,
+  LayoutDashboard,
+  Search,
+  Settings,
+  Users
+} from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Toast, Wordmark } from "@mateassist/ui";
 
@@ -25,6 +34,13 @@ const NAV = [
     label: "Knowledge Base",
     icon: BookOpen,
     crumb: "Knowledge Base",
+    adminOnly: true
+  },
+  {
+    to: "/app/people",
+    label: "People",
+    icon: Users,
+    crumb: "People",
     adminOnly: true
   },
   {

@@ -18,5 +18,20 @@ export const workspaceApi = {
    */
   save: (fields) => apiFetch("/workspace/settings/", { method: "PATCH", body: fields }),
 
-  sendTest: (to) => apiFetch("/workspace/mail-test/", { method: "POST", body: { to } })
+  sendTest: (to) => apiFetch("/workspace/mail-test/", { method: "POST", body: { to } }),
+
+  /** Everyone in this workspace, for its administrator (D-159). */
+  users: (signal) => apiFetch("/workspace/users/", { signal }),
+
+  /**
+   * Reset a member's password. Omit `newPassword` and the server generates one.
+   *
+   * The password comes back exactly once. There is no endpoint that can show it
+   * again, so the caller has to put it in front of the administrator now.
+   */
+  resetPassword: (userId, newPassword) =>
+    apiFetch(`/workspace/users/${userId}/reset-password/`, {
+      method: "POST",
+      body: newPassword ? { new_password: newPassword } : {}
+    })
 };
