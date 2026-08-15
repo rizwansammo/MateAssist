@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
-from rest_framework import serializers, status
+from rest_framework import serializers, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -12,7 +13,7 @@ from rest_framework.views import APIView
 from apps.audit.models import Level, record
 
 from .context import platform_scope
-from .models import ASSISTANT_INSTRUCTIONS_MAX, Membership, Role
+from .models import ASSISTANT_INSTRUCTIONS_MAX, AssistantRule, Membership, Role
 
 
 class IsWorkspaceAdmin(BasePermission):
@@ -318,3 +319,124 @@ class WorkspaceUserPasswordResetView(APIView):
         # to pass it on now; there is no screen that can show it again, which is
         # the same promise the credential vault makes.
         return Response({"password": password, "email": target.email})
+
+
+# ------------------------------------------------------ assistant rules ----
+
+
+class AssistantRuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssistantRule
+        fields = ("id", "text", "enabled", "position", "updated_at")
+        read_only_fields = ("id", "updated_at")
+
+    def validate_text(self, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("A rule needs some text.")
+        return value
+
+    def validate(self, attrs):
+        """Enforce the workspace's TOTAL budget, not just this rule's length.
+
+        Every enabled rule rides in every question, so the cap is a permanent
+        per-question cost rather than a storage limit. A list invites people to
+        keep adding, which is exactly why the ceiling has to be checked on the
+        whole set and not one row at a time - forty short rules would sail past
+        a per-rule limit and push the runbook content out of the prompt.
+        """
+        tenant = self.context["tenant"]
+        text = attrs.get("text", getattr(self.instance, "text", ""))
+        enabled = attrs.get("enabled", getattr(self.instance, "enabled", True))
+        if not enabled:
+            return attrs
+
+        others = AssistantRule.objects.filter(tenant=tenant, enabled=True)
+        if self.instance is not None:
+            others = others.exclude(pk=self.instance.pk)
+
+        total = sum(len(rule.text) for rule in others) + len(text)
+        if total > ASSISTANT_INSTRUCTIONS_MAX:
+            raise serializers.ValidationError(
+                {
+                    "text": (
+                        f"That would take your rules to {total} characters, over the "
+                        f"{ASSISTANT_INSTRUCTIONS_MAX} limit. Shorten or disable another rule."
+                    )
+                }
+            )
+        return attrs
+
+
+class AssistantRuleViewSet(viewsets.ModelViewSet):
+    """One rule per row, owned by this workspace's administrator (D-167).
+
+    Scoped to request.tenant on both read and write. RLS would refuse a
+    cross-workspace row anyway, but a queryset that never selects one means the
+    404 comes from the application rather than from a database error.
+    """
+
+    serializer_class = AssistantRuleSerializer
+    permission_classes = [IsWorkspaceAdmin]
+
+    def get_queryset(self):
+        return AssistantRule.objects.filter(tenant=self.request.tenant)
+
+    def get_serializer_context(self):
+        return {**super().get_serializer_context(), "tenant": self.request.tenant}
+
+    def perform_create(self, serializer):
+        # Appended, not prepended. Rules are read top to bottom and a new one
+        # silently jumping the queue would change how existing ones apply.
+        last = (
+            AssistantRule.objects.filter(tenant=self.request.tenant).order_by("-position").first()
+        )
+        rule = serializer.save(
+            tenant=self.request.tenant, position=(last.position + 1) if last else 0
+        )
+        record(
+            "workspace.rule.added",
+            tenant=self.request.tenant,
+            actor=self.request.user,
+            target=rule.text[:80],
+        )
+
+    def perform_destroy(self, instance):
+        record(
+            "workspace.rule.removed",
+            tenant=self.request.tenant,
+            actor=self.request.user,
+            target=instance.text[:80],
+        )
+        instance.delete()
+
+    @extend_schema(request=None, responses={200: AssistantRuleSerializer(many=True)})
+    @action(detail=False, methods=["post"], url_path="reorder")
+    def reorder(self, request):
+        """Persist a new order in one request.
+
+        Sent as a whole list rather than a move-up/move-down endpoint: dragging
+        three rules would otherwise be three round trips, and a failure halfway
+        through would leave an order nobody chose.
+        """
+        ids = request.data.get("ids")
+        if not isinstance(ids, list):
+            return Response(
+                {"detail": "Send an `ids` list in the order you want."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        owned = {rule.id: rule for rule in self.get_queryset()}
+        if set(ids) != set(owned):
+            # A partial list would leave the omitted rules at stale positions,
+            # silently interleaving them with the reordered ones.
+            return Response(
+                {"detail": "Send every rule in this workspace, once each."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        for position, rule_id in enumerate(ids):
+            owned[rule_id].position = position
+        AssistantRule.objects.bulk_update(owned.values(), ["position"])
+
+        return Response(AssistantRuleSerializer(self.get_queryset(), many=True).data)

@@ -1,6 +1,8 @@
 from django.urls import path
+from rest_framework.routers import DefaultRouter
 
 from .views import (
+    AssistantRuleViewSet,
     WorkspaceMailTestView,
     WorkspaceSettingsView,
     WorkspaceUserListView,
@@ -9,7 +11,10 @@ from .views import (
 
 app_name = "tenancy"
 
-urlpatterns = [
+router = DefaultRouter()
+router.register("workspace/rules", AssistantRuleViewSet, basename="assistantrule")
+
+urlpatterns = router.urls + [
     path("workspace/settings/", WorkspaceSettingsView.as_view(), name="workspace-settings"),
     path("workspace/mail-test/", WorkspaceMailTestView.as_view(), name="workspace-mail-test"),
     path("workspace/users/", WorkspaceUserListView.as_view(), name="workspace-users"),

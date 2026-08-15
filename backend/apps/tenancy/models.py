@@ -22,6 +22,10 @@ class Role(models.TextChoices):
 # become the dominant cost of every question the workspace asks.
 ASSISTANT_INSTRUCTIONS_MAX = 4000
 
+# Per rule. Short enough that a rule stays a rule rather than becoming an essay
+# with a checkbox next to it.
+ASSISTANT_RULE_MAX = 500
+
 
 class Plan(models.TextChoices):
     GROWTH = "GROWTH", "Growth"
@@ -141,6 +145,18 @@ class Tenant(models.Model):
     # ---- SMTP credential handling ----------------------------------------
 
     @property
+    def workspace_instructions(self) -> str:
+        """The enabled rules, joined for the prompt (D-167).
+
+        The model still receives one block - splitting the UI into rows changed
+        how they are WRITTEN, not how they are read. Disabled rules are excluded
+        here rather than filtered at the call site, so a caller cannot forget
+        and quietly reinstate a rule someone deliberately turned off.
+        """
+        rules = self.assistant_rules.filter(enabled=True).order_by("position", "id")
+        return "\n\n".join(rule.text for rule in rules)
+
+    @property
     def smtp_vault_context(self) -> str:
         """Binds the ciphertext to this row, so a blob lifted from one tenant
         cannot be decrypted as another's (D-071)."""
@@ -169,6 +185,45 @@ class Tenant(models.Model):
         if not self.smtp_password_ciphertext:
             return ""
         return vault.open_sealed(self.smtp_password_ciphertext, context=self.smtp_vault_context)
+
+
+class AssistantRule(models.Model):
+    """One workspace instruction, as its own row (D-167).
+
+    These were a single 4000-character textarea. Same data, but a blank box that
+    size is intimidating: people opened it, could not tell what belonged in it,
+    and closed it again. "Add a rule" asks for one sentence, which is a far
+    smaller thing to agree to - and someone who writes one usually writes three.
+
+    Separate rows also buy things a textarea cannot:
+
+    - correcting one line cannot accidentally break another
+    - `enabled` turns a rule off for a holiday shutdown without losing the
+      wording, which is what deleting it would cost
+    - `position` makes the read order visible, since the model reads them top
+      to bottom and an essay hides that entirely
+
+    The model still receives one joined block, so nothing about prompting
+    changes. This is about whether a human will write them at all.
+    """
+
+    tenant = models.ForeignKey(
+        "tenancy.Tenant", on_delete=models.CASCADE, related_name="assistant_rules"
+    )
+    text = models.TextField(max_length=ASSISTANT_RULE_MAX)
+    enabled = models.BooleanField(
+        default=True, help_text="Turn off temporarily without losing the wording."
+    )
+    position = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("position", "id")
+        indexes = [models.Index(fields=["tenant", "position"])]
+
+    def __str__(self) -> str:
+        return self.text[:60]
 
 
 class Membership(models.Model):

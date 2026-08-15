@@ -155,7 +155,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             question=user_message.text,
             hits=grounded,
             attachment_description=attachment_description,
-            workspace_instructions=request.tenant.assistant_instructions,
+            workspace_instructions=request.tenant.workspace_instructions,
         )
 
         try:
@@ -221,7 +221,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             question=user_message.text,
             hits=grounded,
             attachment_description=attachment_description,
-            workspace_instructions=tenant.assistant_instructions,
+            workspace_instructions=tenant.workspace_instructions,
         )
         citations = [hit.citation for hit in citable]
 

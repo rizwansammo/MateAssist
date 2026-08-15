@@ -179,3 +179,50 @@ def test_a_new_proposal_gets_its_own_button(world):
     # The first is untouched - its receipt still shows its own time.
     world["assistant"].refresh_from_db()
     assert world["assistant"].escalation_sent_at is not None
+
+
+# ------------------------------------------------- reaching the user back ----
+
+
+def test_the_ticket_carries_the_users_email_address(world):
+    """The helpdesk showed "REPORTED BY Rizwan" and nothing else, so the
+    engineer had a name and no way to contact anyone (D-166)."""
+    escalate(world)
+    body = outbox()[0].body
+
+    assert "rizwan@alpha.test" in body
+    assert "REPLY TO" in body
+
+
+def test_reply_to_is_the_user_not_the_workspace_mailbox(world):
+    escalate(world)
+
+    assert outbox()[0].reply_to == ["rizwan@alpha.test"]
+
+
+def test_the_sender_name_is_the_person_who_raised_it(world):
+    """A helpdesk that files tickets by the From address recorded every
+    escalation as raised by MateAssist's own mailbox. The address is unchanged -
+    only the display name now names the person, so nothing about SPF moves."""
+    # From address only. Setting smtp_host too would make this dial a real
+    # server instead of the in-memory backend, which tests DNS rather than the
+    # header under examination.
+    world["conversation"].tenant.smtp_from_email = "aiassist@alpha.test"
+    world["conversation"].tenant.save()
+
+    escalate(world)
+    sender = outbox()[0].from_email
+
+    assert "rizwan@alpha.test" in sender or "Rizwan" in sender or "rizwan" in sender.lower()
+    # The address itself must not become the user's, or the workspace's mail
+    # server would be sending as a domain it has no authority for.
+    assert sender.endswith("<aiassist@alpha.test>")
+
+
+def test_a_user_with_no_name_still_produces_a_usable_ticket(world):
+    """display_name falls back to the email, so the ticket is still actionable
+    for an account nobody has filled in."""
+    escalate(world)
+    body = outbox()[0].body
+
+    assert "no address on file" not in body

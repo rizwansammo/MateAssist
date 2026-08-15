@@ -24,10 +24,17 @@ from .models import Message
 
 logger = logging.getLogger(__name__)
 
+# REPLY TO carries the user's address in the body as well as in the header
+# (D-166). Reply-To is set correctly, but a helpdesk that files tickets by the
+# From address shows the ticket as raised by MateAssist's own mailbox - so the
+# engineer sees a name, has no way to reach the person, and replies to a robot.
+# A line they can copy costs nothing and does not depend on the receiving system
+# honouring a header.
 BODY_TEMPLATE = """A user could not resolve this issue with MateAssist and asked for a human.
 
 WORKSPACE   {tenant}
 REPORTED BY {user}
+REPLY TO    {user_email}
 CATEGORY    {category}
 RAISED      {timestamp}
 
@@ -38,7 +45,8 @@ RAISED      {timestamp}
 {transcript}
 
 --
-Sent by MateAssist. Replying to this email reaches the user directly.
+Sent by MateAssist on behalf of {user}.
+Reply to this email, or write to {user_email} directly.
 """
 
 
@@ -102,9 +110,11 @@ def send_escalation(*, tenant, user, conversation, proposal: dict) -> dict:
 
     subject = (proposal.get("subject") or "IT issue escalated from MateAssist").strip()
 
+    user_email = getattr(user, "email", "") or ""
     body = BODY_TEMPLATE.format(
         tenant=tenant.name,
-        user=getattr(user, "display_name", None) or getattr(user, "email", "unknown"),
+        user=getattr(user, "display_name", None) or user_email or "unknown",
+        user_email=user_email or "no address on file",
         category=proposal.get("category") or "Other",
         timestamp=timezone.now().strftime("%Y-%m-%d %H:%M UTC"),
         summary=proposal.get("summary") or "(no summary provided)",
@@ -118,7 +128,11 @@ def send_escalation(*, tenant, user, conversation, proposal: dict) -> dict:
     email = EmailMessage(
         subject=f"[MateAssist] {subject}",
         body=body,
-        from_email=mail.from_address(tenant),
+        # The sender's display name names the PERSON, not the product: a
+        # helpdesk that files by From address then shows "Rizwan via NetaMate
+        # Solutions" in its queue instead of MateAssist's own mailbox. The
+        # address is unchanged, so nothing about authentication moves.
+        from_email=mail.from_address(tenant, on_behalf_of=user),
         to=[recipient],
         # Replying reaches the user rather than a no-reply void.
         reply_to=[user.email] if getattr(user, "email", None) else None,

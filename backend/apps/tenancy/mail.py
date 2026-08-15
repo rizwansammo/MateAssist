@@ -47,7 +47,7 @@ def connection_for(tenant):
     )
 
 
-def from_address(tenant) -> str:
+def from_address(tenant, *, on_behalf_of=None) -> str:
     """The From header for mail this workspace sends, name included (D-162).
 
     Falls back to the platform address, which is correct for a workspace with no
@@ -58,11 +58,23 @@ def from_address(tenant) -> str:
     a full stop and RFC-2047 encodes anything non-ASCII. "Smith, Jones IT"
     interpolated raw would be parsed as two recipients, and an accented name
     would arrive as mojibake or be rejected outright.
+
+    `on_behalf_of` names the person the mail is being sent FOR - "Rizwan via
+    NetaMate Solutions" (D-166). Only the display name changes; the address is
+    the workspace's own, so SPF and DKIM are untouched. It exists because a
+    helpdesk that files tickets by the From address otherwise records every
+    escalation as raised by MateAssist's mailbox, leaving the engineer with a
+    name and no way to reach anyone.
     """
     if tenant is None or not tenant.smtp_from_email:
         return settings.DEFAULT_FROM_EMAIL
 
     name = (tenant.smtp_from_name or tenant.name or "").strip()
+
+    person = (getattr(on_behalf_of, "display_name", "") or "").strip()
+    if person:
+        name = f"{person} via {name}" if name else person
+
     return formataddr((name, tenant.smtp_from_email)) if name else tenant.smtp_from_email
 
 
