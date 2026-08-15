@@ -1,4 +1,4 @@
-import { apiFetch, getAccessToken } from "./api.js";
+import { api, apiFetch, getAccessToken } from "./api.js";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 
@@ -26,44 +26,66 @@ export const knowledgeApi = {
   /** What Gemini said about each figure, and where it sat in the document. */
   assets: (id) => apiFetch(`/knowledge/documents/${id}/assets/`),
 
+  /**
+   * Upload a runbook.
+   *
+   * XHR rather than fetch: fetch still has no upload progress events, and a
+   * multi-megabyte runbook with no progress bar looks frozen.
+   *
+   * The cost of leaving `apiFetch` is that this path does not inherit its
+   * refresh-on-401 retry, and that was a real bug: an access token lives 15
+   * minutes, so an upload attempted later in a session failed with the raw
+   * "Given token not valid for any token type" while every other request in the
+   * app silently refreshed and carried on. The retry is reimplemented here
+   * rather than the progress bar being given up.
+   */
   async upload(file, { title, category, onProgress } = {}) {
-    const form = new FormData();
-    form.append("file", file);
-    if (title) form.append("title", title);
-    if (category) form.append("category", category);
+    const attempt = (token) =>
+      new Promise((resolve, reject) => {
+        const form = new FormData();
+        form.append("file", file);
+        if (title) form.append("title", title);
+        if (category) form.append("category", category);
 
-    // XHR rather than fetch: fetch still has no upload progress events, and a
-    // runbook upload with no progress bar looks frozen.
-    return new Promise((resolve, reject) => {
-      const request = new XMLHttpRequest();
-      request.open("POST", `${BASE_URL}/knowledge/documents/`);
-      request.withCredentials = true;
+        const request = new XMLHttpRequest();
+        request.open("POST", `${BASE_URL}/knowledge/documents/`);
+        request.withCredentials = true;
+        if (token) request.setRequestHeader("Authorization", `Bearer ${token}`);
 
-      const token = getAccessToken();
-      if (token) request.setRequestHeader("Authorization", `Bearer ${token}`);
+        request.upload.onprogress = (event) => {
+          if (event.lengthComputable && onProgress) {
+            onProgress(Math.round((event.loaded / event.total) * 100));
+          }
+        };
 
-      request.upload.onprogress = (event) => {
-        if (event.lengthComputable && onProgress) {
-          onProgress(Math.round((event.loaded / event.total) * 100));
-        }
-      };
+        request.onload = () => {
+          let body = null;
+          try {
+            body = JSON.parse(request.responseText);
+          } catch {
+            body = null;
+          }
+          if (request.status >= 200 && request.status < 300) {
+            resolve(body);
+          } else {
+            const error = new Error(body?.detail || `Upload failed (${request.status})`);
+            error.status = request.status;
+            reject(error);
+          }
+        };
+        request.onerror = () => reject(new Error("Network error during upload"));
+        request.send(form);
+      });
 
-      request.onload = () => {
-        let body = null;
-        try {
-          body = JSON.parse(request.responseText);
-        } catch {
-          body = null;
-        }
-        if (request.status >= 200 && request.status < 300) {
-          resolve(body);
-        } else {
-          reject(new Error(body?.detail || `Upload failed (${request.status})`));
-        }
-      };
-      request.onerror = () => reject(new Error("Network error during upload"));
-      request.send(form);
-    });
+    try {
+      return await attempt(getAccessToken());
+    } catch (error) {
+      if (error.status !== 401) throw error;
+      // One retry, exactly as apiFetch does. A second 401 means the session is
+      // genuinely gone rather than merely stale.
+      await api.restoreSession();
+      return attempt(getAccessToken());
+    }
   }
 };
 

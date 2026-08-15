@@ -1,4 +1,4 @@
-import { apiFetch, getAccessToken } from "./api.js";
+import { api, apiFetch, getAccessToken } from "./api.js";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 
@@ -75,7 +75,17 @@ export const chatApi = {
   }
 };
 
-async function rawPost(path, body, signal) {
+/**
+ * POST multipart, outside apiFetch because these carry a FormData body and, for
+ * the stream, need the raw Response rather than parsed JSON.
+ *
+ * The refresh-on-401 retry is reimplemented here deliberately. An access token
+ * lives 15 minutes; without this, a user who left the tab open over lunch got a
+ * hard failure on their next message while every other request in the app
+ * refreshed silently. Leaving apiFetch means giving up its behaviour, so the
+ * behaviour has to be restored, not assumed.
+ */
+async function rawPost(path, body, signal, retrying = false) {
   const token = getAccessToken();
   const response = await fetch(`${BASE_URL}${path}`, {
     method: "POST",
@@ -84,6 +94,14 @@ async function rawPost(path, body, signal) {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body
   });
+
+  if (response.status === 401 && !retrying) {
+    // One retry only. A second 401 means the session is genuinely gone rather
+    // than merely stale, and retrying a failed refresh is an infinite loop.
+    await api.restoreSession();
+    return rawPost(path, body, signal, true);
+  }
+
   if (!response.ok) {
     let detail = `Request failed (${response.status})`;
     try {
