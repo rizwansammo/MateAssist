@@ -13,7 +13,6 @@ push it through the actual serializer.
 import struct
 import zlib
 
-import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 from apps.chat.serializers import SendMessageSerializer
