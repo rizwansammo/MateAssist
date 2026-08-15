@@ -6,13 +6,17 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('tenancy', '0005_tenant_smtp_from_email_tenant_smtp_host_and_more'),
+        ("tenancy", "0005_tenant_smtp_from_email_tenant_smtp_host_and_more"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='tenant',
-            name='smtp_from_email',
-            field=models.EmailField(blank=True, help_text='The From address on escalation emails. Must be one your mail server is allowed to send as.', max_length=254),
+            model_name="tenant",
+            name="smtp_from_email",
+            field=models.EmailField(
+                blank=True,
+                help_text="The From address on escalation emails. Must be one your mail server is allowed to send as.",
+                max_length=254,
+            ),
         ),
     ]
