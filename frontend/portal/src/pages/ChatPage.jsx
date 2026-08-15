@@ -3,6 +3,7 @@ import { AlertTriangle, Bot, Check, Mail } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { AnswerBody } from "../components/AnswerBody.jsx";
+import { ThinkingIndicator } from "../components/ThinkingIndicator.jsx";
 import { ChatComposer } from "../components/ChatComposer.jsx";
 import { MessageAttachment } from "../components/MessageAttachment.jsx";
 import { useConversations } from "../context/ConversationsContext.jsx";
@@ -215,10 +216,10 @@ export default function ChatPage() {
   // where every other chat product keeps it - two sidebars made MateAssist look
   // like two applications side by side.
   return (
-    <main className="flex min-h-[calc(100vh-66px)] flex-col">
+    <main className="flex h-[calc(100vh-66px)] flex-col overflow-hidden">
 
-      <section className="flex min-w-0 flex-col bg-white">
-        <div className="sticky top-[66px] z-10 flex items-center gap-3 border-b border-hairline bg-white px-6 py-4">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-white">
+        <div className="z-10 flex flex-none items-center gap-3 border-b border-hairline bg-white px-6 py-4">
           <div className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-none bg-ink">
             <Bot size={18} strokeWidth={1.8} className="text-emerald-400" />
           </div>
@@ -247,7 +248,11 @@ export default function ChatPage() {
           </button>
         </div>
 
-        <div className="flex flex-1 flex-col gap-6 bg-[#FCFDFE] px-6 pb-5 pt-7">
+        {/* The only scrolling region. The page used to grow with the
+            transcript, so on an empty conversation the composer sat halfway up
+            the screen and then walked downward as messages arrived - it should
+            be in the same place every time you look for it. */}
+        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto bg-[#FCFDFE] px-6 pb-5 pt-7">
           {loadingThread && messages.length === 0 && (
             <div className="mx-auto py-10 text-[13px] text-slate-400" role="status">
               Opening conversation...
@@ -255,7 +260,7 @@ export default function ChatPage() {
           )}
 
           {!loadingThread && messages.length === 0 && !streaming && (
-            <div className="mx-auto max-w-[520px] py-10 text-center">
+            <div className="m-auto max-w-[520px] py-10 text-center">
               <div className="text-[15px] font-semibold text-ink">
                 Ask about anything IT
               </div>
@@ -291,17 +296,7 @@ export default function ChatPage() {
             </div>
           )}
 
-          {busy && !streaming && (
-            <div className="flex items-center gap-3">
-              <div className="flex h-[30px] w-[30px] flex-none items-center justify-center rounded-none bg-ink">
-                <Bot size={16} strokeWidth={1.8} className="text-emerald-400" />
-              </div>
-              <div className="flex items-center gap-2.5 rounded-none border border-hairline bg-white px-4 py-3 text-[13.5px] text-slate-500">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-none bg-emerald-500" />
-                {phase === "writing" ? "Writing your answer..." : "Looking this up..."}
-              </div>
-            </div>
-          )}
+          {busy && !streaming && <ThinkingIndicator phase={phase} />}
 
           <div ref={bottomRef} />
         </div>

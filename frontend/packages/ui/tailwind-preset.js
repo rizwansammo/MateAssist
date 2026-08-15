@@ -26,10 +26,18 @@ export default {
         toastIn: {
           "0%": { opacity: "0", transform: "translateX(16px)" },
           "100%": { opacity: "1", transform: "translateX(0)" }
+        },
+        // A sheen crossing a short track, used while the assistant is working.
+        // Defined here rather than as an arbitrary value in the component so
+        // both surfaces animate identically (D-104).
+        shimmer: {
+          "0%": { transform: "translateX(0)" },
+          "100%": { transform: "translateX(300%)" }
         }
       },
       animation: {
-        toastIn: "toastIn 200ms ease-out"
+        toastIn: "toastIn 200ms ease-out",
+        shimmer: "shimmer 1.4s ease-in-out infinite"
       }
     }
   },
