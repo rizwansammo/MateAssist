@@ -13,6 +13,7 @@ settings, so escalation keeps working out of the box.
 from __future__ import annotations
 
 import logging
+from email.utils import formataddr
 
 from django.conf import settings
 from django.core.mail import get_connection
@@ -47,15 +48,22 @@ def connection_for(tenant):
 
 
 def from_address(tenant) -> str:
-    """The From header for mail this workspace sends.
+    """The From header for mail this workspace sends, name included (D-162).
 
     Falls back to the platform address, which is correct for a workspace with no
     mail server of its own - and wrong to use alongside a workspace host, since
     that mismatch is precisely what fails SPF.
+
+    `formataddr` rather than an f-string: it quotes a name containing a comma or
+    a full stop and RFC-2047 encodes anything non-ASCII. "Smith, Jones IT"
+    interpolated raw would be parsed as two recipients, and an accented name
+    would arrive as mojibake or be rejected outright.
     """
-    if tenant is not None and tenant.smtp_from_email:
-        return tenant.smtp_from_email
-    return settings.DEFAULT_FROM_EMAIL
+    if tenant is None or not tenant.smtp_from_email:
+        return settings.DEFAULT_FROM_EMAIL
+
+    name = (tenant.smtp_from_name or tenant.name or "").strip()
+    return formataddr((name, tenant.smtp_from_email)) if name else tenant.smtp_from_email
 
 
 def send_test(tenant, recipient: str) -> dict:

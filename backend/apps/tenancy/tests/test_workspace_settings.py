@@ -319,4 +319,67 @@ def test_the_from_address_belongs_to_the_workspace_once_configured(world):
     assert mail.from_address(tenant) != "helpdesk@alpha.test"
 
     tenant.smtp_from_email = "helpdesk@alpha.test"
-    assert mail.from_address(tenant) == "helpdesk@alpha.test"
+    # The workspace name now rides along as a display name (D-162), so this is
+    # the address plus who it is from rather than a bare mailbox.
+    assert mail.from_address(tenant).endswith("<helpdesk@alpha.test>")
+    assert tenant.name in mail.from_address(tenant)
+
+
+# ------------------------------------------------- sender display name -------
+
+
+def test_the_from_header_carries_the_workspace_name(db):
+    """Escalations arrived showing a bare "aiassist.netamate" and went to spam.
+    A named sender is the difference between mail that looks automated and mail
+    that looks anonymous (D-162)."""
+    from apps.tenancy import mail
+
+    tenant = Tenant.objects.create(
+        name="NetaMate Solutions",
+        slug="netamate-display",
+        smtp_host="smtp.gmail.com",
+        smtp_from_email="aiassist@netamate.com",
+    )
+
+    assert mail.from_address(tenant) == "NetaMate Solutions <aiassist@netamate.com>"
+
+
+def test_an_explicit_name_overrides_the_workspace_name(db):
+    from apps.tenancy import mail
+
+    tenant = Tenant.objects.create(
+        name="NetaMate Solutions",
+        slug="netamate-override",
+        smtp_host="smtp.gmail.com",
+        smtp_from_email="aiassist@netamate.com",
+        smtp_from_name="NetaMate IT Helpdesk",
+    )
+
+    assert mail.from_address(tenant) == "NetaMate IT Helpdesk <aiassist@netamate.com>"
+
+
+def test_a_name_containing_a_comma_is_quoted(db):
+    """Interpolated raw, "Smith, Jones IT" is parsed as two recipients and the
+    message either splits or is rejected."""
+    from apps.tenancy import mail
+
+    tenant = Tenant.objects.create(
+        name="Smith, Jones IT",
+        slug="comma-name",
+        smtp_host="smtp.gmail.com",
+        smtp_from_email="it@smithjones.test",
+    )
+
+    assert mail.from_address(tenant) == '"Smith, Jones IT" <it@smithjones.test>'
+
+
+def test_a_workspace_with_no_mail_server_still_falls_back(db):
+    """No host means the platform sends it, and the platform's own From address
+    must not be dressed up with a tenant's name."""
+    from django.conf import settings
+
+    from apps.tenancy import mail
+
+    tenant = Tenant.objects.create(name="Bare", slug="bare-workspace")
+
+    assert mail.from_address(tenant) == settings.DEFAULT_FROM_EMAIL

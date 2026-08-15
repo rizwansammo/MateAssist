@@ -99,6 +99,7 @@ class WorkspaceSettingsView(APIView):
             "smtp_username",
             "smtp_use_tls",
             "smtp_from_email",
+            "smtp_from_name",
         ):
             if field in data and getattr(tenant, field) != data[field]:
                 setattr(tenant, field, data[field])

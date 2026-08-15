@@ -368,19 +368,44 @@ class ConversationViewSet(viewsets.ModelViewSet):
         it (D-126).
         """
         conversation = self.get_object()
+
+        # The message carrying the proposal, not just the proposal text. It is
+        # what gets stamped as sent, and what the guard below reads.
+        carrier = (
+            conversation.messages.filter(proposed_escalation__isnull=False)
+            .order_by("-created_at")
+            .first()
+        )
         proposal = request.data.get("proposal") or {}
         if not proposal.get("subject"):
-            last = (
-                conversation.messages.filter(proposed_escalation__isnull=False)
-                .order_by("-created_at")
-                .first()
-            )
-            proposal = (last.proposed_escalation if last else {}) or {}
+            proposal = (carrier.proposed_escalation if carrier else {}) or {}
         if not proposal:
             return Response(
                 {"detail": "There is nothing to escalate yet."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Claim the send before doing it, in one atomic UPDATE ... WHERE NOT
+        # SENT (D-163). Checking the field and then sending would still let two
+        # clicks a few milliseconds apart both pass the check and both send -
+        # and a duplicate escalation is a second ticket in a real helpdesk
+        # queue, not a cosmetic glitch.
+        if carrier is not None:
+            claimed = Message.objects.filter(pk=carrier.pk, escalation_sent_at__isnull=True).update(
+                escalation_sent_at=timezone.now()
+            )
+            if not claimed:
+                carrier.refresh_from_db()
+                return Response(
+                    {
+                        "sent": False,
+                        "already_sent": True,
+                        "detail": "This request has already been sent to your IT team.",
+                        "recipient": carrier.escalation_recipient,
+                        "sent_at": carrier.escalation_sent_at,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
         result = escalation.send_escalation(
             tenant=request.tenant,
@@ -388,6 +413,17 @@ class ConversationViewSet(viewsets.ModelViewSet):
             conversation=conversation,
             proposal=proposal,
         )
+
+        if carrier is not None:
+            if result["sent"]:
+                Message.objects.filter(pk=carrier.pk).update(
+                    escalation_recipient=result.get("recipient", "")
+                )
+            else:
+                # Release the claim. A failed send that stayed marked would
+                # leave the user with no button and no email - the worst of both.
+                Message.objects.filter(pk=carrier.pk).update(escalation_sent_at=None)
+
         return Response(
             result, status=status.HTTP_200_OK if result["sent"] else status.HTTP_502_BAD_GATEWAY
         )

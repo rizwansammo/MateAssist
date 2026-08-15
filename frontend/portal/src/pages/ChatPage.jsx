@@ -36,6 +36,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState([]);
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
   // "searching" until the server signals that retrieval finished, then
   // "writing" (D-143). Retrieval takes about 50ms and the answer takes seconds,
   // so a single "Searching your runbooks..." label was untrue for almost the
@@ -185,18 +186,38 @@ export default function ChatPage() {
     }
   };
 
-  const escalate = async (proposal) => {
+  const escalate = async (message) => {
+    // Guarded here as well as on the server. The server refuses a repeat, but
+    // without this the button stays pressable while the first request is in
+    // flight and the user gets a needless error toast for their second click.
+    if (sending) return;
+    setSending(true);
     try {
-      const result = await chatApi.escalate(conversationId, proposal);
+      const result = await chatApi.escalate(conversationId, message.proposed_escalation);
       if (result.sent) {
         notify("Sent to your IT team", `Emailed to ${result.recipient}`);
-        const conversation = await chatApi.getConversation(conversationId);
-        setMessages(conversation.messages ?? []);
       } else {
         notify("Could not send", result.detail, "warn");
       }
     } catch (error) {
-      notify("Could not send", error.message, "warn");
+      // 409 means it was already sent - a duplicate click, not a failure. The
+      // reload below turns the card into a receipt, which answers the user's
+      // real question ("did it go?") better than an error would.
+      if (error.status === 409) {
+        notify("Already sent", error.body?.detail ?? "This request was already sent.");
+      } else {
+        notify("Could not send", error.message, "warn");
+      }
+    } finally {
+      // Always reload: the message now carries escalation_sent_at, which is
+      // what replaces the button with the receipt.
+      try {
+        const conversation = await chatApi.getConversation(conversationId);
+        setMessages(conversation.messages ?? []);
+      } catch {
+        /* the toast already told them what happened */
+      }
+      setSending(false);
     }
   };
 
@@ -336,6 +357,7 @@ export default function ChatPage() {
               key={message.id}
               message={message}
               conversationId={conversationId}
+              sending={sending}
               onEscalate={escalate}
               onRate={rate}
             />
@@ -382,7 +404,7 @@ export default function ChatPage() {
   );
 }
 
-function MessageBubble({ message, conversationId, onEscalate, onRate }) {
+function MessageBubble({ message, conversationId, sending, onEscalate, onRate }) {
   const isAi = message.role === "assistant";
 
   return (
@@ -431,7 +453,43 @@ function MessageBubble({ message, conversationId, onEscalate, onRate }) {
         */}
 
         {/* A-008 / D-126: the model proposed this; the click sends it. */}
-        {message.proposed_escalation && (
+        {/* Sent, so the card becomes a receipt (D-163). The button used to
+            stay live afterwards and a second click sent a second copy of the
+            same escalation - a duplicate ticket in a real helpdesk queue.
+            Raising another request means asking again, which produces a new
+            proposal on a new message. */}
+        {message.proposed_escalation && message.escalation_sent_at && (
+          <div className="mt-4 rounded-none border border-emerald-200 bg-emerald-50 p-3.5">
+            <div className="flex gap-2.5">
+              <Check size={16} strokeWidth={2.4} className="mt-0.5 flex-none text-emerald-700" />
+              <div className="min-w-0">
+                <div className="text-[13px] font-semibold text-emerald-900">
+                  Support request sent
+                </div>
+                {message.proposed_escalation.subject && (
+                  <p className="mt-1 text-[12.5px] font-medium text-emerald-900">
+                    {message.proposed_escalation.subject}
+                  </p>
+                )}
+                <p className="mt-1 text-[12px] leading-relaxed text-emerald-800">
+                  {message.escalation_recipient
+                    ? `Emailed to ${message.escalation_recipient}`
+                    : "Emailed to your IT team"}
+                  {" - "}
+                  {new Date(message.escalation_sent_at).toLocaleString("en-GB", {
+                    dateStyle: "medium",
+                    timeStyle: "short"
+                  })}
+                </p>
+                <p className="mt-1.5 text-[12px] text-emerald-700">
+                  They will reply to you directly. Ask again if you need to raise another.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {message.proposed_escalation && !message.escalation_sent_at && (
           <div className="mt-4 rounded-none border border-amber-200 bg-amber-50 p-3.5">
             <div className="flex gap-2.5">
               <AlertTriangle
@@ -443,6 +501,11 @@ function MessageBubble({ message, conversationId, onEscalate, onRate }) {
                 <div className="text-[13px] font-semibold text-amber-900">
                   This needs a human
                 </div>
+                {message.proposed_escalation.subject && (
+                  <p className="mt-1 text-[12.5px] font-medium text-amber-900">
+                    {message.proposed_escalation.subject}
+                  </p>
+                )}
                 <p className="mt-1 text-[12.5px] leading-relaxed text-amber-800">
                   {message.proposed_escalation.summary}
                 </p>
@@ -450,11 +513,12 @@ function MessageBubble({ message, conversationId, onEscalate, onRate }) {
             </div>
             <button
               type="button"
-              onClick={() => onEscalate(message.proposed_escalation)}
-              className="mt-3 flex items-center gap-2 rounded-none bg-emerald-600 px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-emerald-700"
+              disabled={sending}
+              onClick={() => onEscalate(message)}
+              className="mt-3 flex items-center gap-2 rounded-none bg-emerald-600 px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-800"
             >
               <Mail size={15} />
-              Email my IT team
+              {sending ? "Sending..." : "Email my IT team"}
             </button>
           </div>
         )}

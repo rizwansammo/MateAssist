@@ -67,6 +67,20 @@ class Message(TenantScopedModel):
     # user's click sends the email (D-126).
     proposed_escalation = models.JSONField(null=True, blank=True)
 
+    # When THIS proposal was actually sent (D-163).
+    #
+    # Per message, not per conversation. A conversation can carry several
+    # proposals - a user often asks again after the first attempt - and a
+    # conversation-level flag would grey out every button the moment any one of
+    # them was used.
+    #
+    # It is also the idempotency guard. The button used to stay live after
+    # sending, so a second click sent a second copy of the same escalation to
+    # the helpdesk; hiding the button alone would not have fixed it, because two
+    # rapid clicks race before any state comes back.
+    escalation_sent_at = models.DateTimeField(null=True, blank=True, editable=False)
+    escalation_recipient = models.EmailField(blank=True)
+
     prompt_tokens = models.PositiveIntegerField(default=0)
     completion_tokens = models.PositiveIntegerField(default=0)
     latency_ms = models.PositiveIntegerField(default=0)

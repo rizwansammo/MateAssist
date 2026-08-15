@@ -29,6 +29,8 @@ class MessageSerializer(serializers.ModelSerializer):
             "attachment_description",
             "has_attachment",
             "proposed_escalation",
+            "escalation_sent_at",
+            "escalation_recipient",
             "created_at",
         )
         read_only_fields = fields

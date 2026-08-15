@@ -98,6 +98,21 @@ class Tenant(models.Model):
     # would put a working mail credential in every database dump.
     smtp_password_ciphertext = models.TextField(blank=True, editable=False)
 
+    # The name a recipient sees instead of a raw address (D-162).
+    #
+    # Escalations landed in Gmail's spam folder showing only
+    # "aiassist.netamate" - a bare local part with no human name attached. SPF
+    # and DKIM were passing, so authentication was never the problem: an
+    # unnamed sender mailing repetitive templated text to an address that has
+    # never replied simply looks like bulk mail.
+    #
+    # Blank falls back to the workspace's own name, which is nearly always what
+    # an administrator would have typed anyway.
+    smtp_from_name = models.CharField(
+        max_length=120,
+        blank=True,
+        help_text="Display name on escalation emails. Defaults to the workspace name.",
+    )
     smtp_use_tls = models.BooleanField(default=True)
     smtp_from_email = models.EmailField(
         blank=True,
