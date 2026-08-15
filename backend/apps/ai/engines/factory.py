@@ -12,9 +12,9 @@ configuration, roles are architecture.
 from __future__ import annotations
 
 from .base import EngineError
-from .text_deepseek import TextEngine
+from .text_openai_compatible import TextEngine
 from .vision_gemini import VisionEngine as GeminiVisionEngine
-from .vision_openai import OpenAICompatibleVisionEngine
+from .vision_openai_compatible import OpenAICompatibleVisionEngine
 
 
 def build_text_engine(key, api_key: str) -> TextEngine:

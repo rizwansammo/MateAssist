@@ -11,7 +11,7 @@ constructed, which is itself part of the design.
 import pytest
 
 from apps.ai.engines import ImagePayloadRejected, TextEngine, TextMessage
-from apps.ai.engines.text_deepseek import _assert_text_only
+from apps.ai.engines.text_openai_compatible import _assert_text_only
 from apps.ai.engines.vision_gemini import VisionEngine
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64

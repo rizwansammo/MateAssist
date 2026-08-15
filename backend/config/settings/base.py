@@ -235,9 +235,21 @@ CACHES = {
 
 # Model ids are configuration, never constants (D-045). A provider deprecation
 # is an .env change, not a refactor.
-DEEPSEEK_API_BASE = env("DEEPSEEK_API_BASE", default="https://api.deepseek.com")
-DEEPSEEK_MODEL_CHAT = env("DEEPSEEK_MODEL_CHAT", default="deepseek-chat")
-DEEPSEEK_MODEL_REASONER = env("DEEPSEEK_MODEL_REASONER", default="deepseek-reasoner")
+# Last-resort fallbacks for the TEXT role, used only when a provider key
+# carries no base_url or model of its own. A-010 made both per-key, so in any
+# configured deployment these are dead weight - they exist so a fresh checkout
+# starts rather than crashing on an empty base URL.
+#
+# Named for the ROLE, not a vendor. They were DEEPSEEK_* long after the product
+# stopped being tied to DeepSeek, which read as though the choice were baked in.
+# The old environment variable names are still honoured so an existing .env
+# keeps working; drop that fallback once no deployment sets them.
+TEXT_API_BASE_DEFAULT = env(
+    "TEXT_API_BASE_DEFAULT", default=env("DEEPSEEK_API_BASE", default="https://api.deepseek.com")
+)
+TEXT_MODEL_DEFAULT = env(
+    "TEXT_MODEL_DEFAULT", default=env("DEEPSEEK_MODEL_CHAT", default="deepseek-chat")
+)
 GEMINI_MODEL_VISION = env("GEMINI_MODEL_VISION", default="gemini-2.5-flash")
 
 EMBEDDING_MODEL = env("EMBEDDING_MODEL", default="BAAI/bge-small-en-v1.5")

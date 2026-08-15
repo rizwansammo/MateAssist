@@ -12,7 +12,7 @@ from .base import (
     RateLimited,
     TextMessage,
 )
-from .text_deepseek import TextEngine
+from .text_openai_compatible import TextEngine
 from .vision_gemini import VisionEngine
 
 __all__ = [

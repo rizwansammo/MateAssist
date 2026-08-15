@@ -42,6 +42,25 @@ def _arm(tenant_id):
         cursor.execute("SELECT set_config('app.tenant_id', %s, true)", [str(tenant_id)])
 
 
+def _escalation_proposal(tool_calls) -> dict | None:
+    """The escalate_via_email arguments, if the model asked for one.
+
+    Tolerant of malformed JSON on purpose. A truncated arguments string means
+    the model wanted to escalate and ran out of tokens mid-object; discarding
+    that would silently drop a request for help. A proposal with only a subject
+    is still a proposal the user can send.
+    """
+    for call in tool_calls or []:
+        if call.get("name") != "escalate_via_email":
+            continue
+        try:
+            parsed = json.loads(call.get("arguments") or "{}")
+        except json.JSONDecodeError:
+            return {"subject": "Escalation requested"}
+        return parsed if isinstance(parsed, dict) else {"subject": "Escalation requested"}
+    return None
+
+
 def _status_for(exc) -> int:
     """HTTP status by failure kind, so a client can react correctly.
 
@@ -218,7 +237,12 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 from apps.ai.engines.factory import build_text_engine
 
                 client = build_text_engine(key, key.reveal())
-                for delta in client.stream(messages):
+                # The escalation tool, same as the non-streaming path (D-161).
+                # Its absence here meant the model was instructed to use a tool
+                # it was never handed, so it narrated the tool to the user
+                # instead of calling it - and escalation could not be reached
+                # from the chat box at all.
+                for delta in client.stream(messages, tools=[prompts.ESCALATION_TOOL]):
                     collected.append(delta)
                     yield event("delta", {"text": delta})
             except Exception as exc:  # noqa: BLE001
@@ -236,6 +260,18 @@ class ConversationViewSet(viewsets.ModelViewSet):
             answer = "".join(collected).strip()
             usage = getattr(client, "last_usage", None)
 
+            # Read only after the loop: arguments arrive a few characters per
+            # chunk and are not valid JSON until the stream ends.
+            proposal = _escalation_proposal(getattr(client, "last_tool_calls", None))
+
+            # A model that calls the tool often emits no prose at all, which
+            # would render as an empty bubble above the escalation card.
+            if proposal and not answer:
+                answer = (
+                    "I can't resolve this from your runbooks, so I've drafted an "
+                    "escalation for your IT team. Review it and send when you're ready."
+                )
+
             # Re-arm tenant context: the request transaction is long gone by now.
             with tenant_context(tenant.id), transaction.atomic():
                 _arm(tenant.id)
@@ -245,6 +281,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
                     role=Role.ASSISTANT,
                     text=answer,
                     citations=citations,
+                    proposed_escalation=proposal,
                     prompt_tokens=usage.prompt_tokens if usage else 0,
                     completion_tokens=usage.completion_tokens if usage else 0,
                     latency_ms=usage.latency_ms if usage else 0,
@@ -265,7 +302,18 @@ class ConversationViewSet(viewsets.ModelViewSet):
                         result=usage,
                     )
 
-            yield event("done", {"message_id": assistant.pk, "citations": citations})
+            yield event(
+                "done",
+                {
+                    "message_id": assistant.pk,
+                    "citations": citations,
+                    # The portal reloads the conversation on `done`, so it would
+                    # find the proposal anyway - but sending it here lets the
+                    # escalation card appear with the answer instead of after a
+                    # round trip.
+                    "proposed_escalation": proposal,
+                },
+            )
 
         response = StreamingHttpResponse(generate(), content_type="text/event-stream")
         response["Cache-Control"] = "no-cache"

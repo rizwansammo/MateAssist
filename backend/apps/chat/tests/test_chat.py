@@ -107,7 +107,7 @@ def test_no_hits_is_stated_plainly_rather_than_hidden():
 def test_screenshot_reaches_the_prompt_as_TEXT_only():
     """D-042: the image went to the vision engine and stopped there. What
     continues is prose, and it must survive the text engine's guard."""
-    from apps.ai.engines.text_deepseek import _assert_text_only
+    from apps.ai.engines.text_openai_compatible import _assert_text_only
 
     messages = prompts.build_messages(
         tenant_name="Netswitch",
@@ -129,7 +129,7 @@ def test_a_base64_image_in_a_description_is_still_rejected():
     """Defence in depth: if a vision engine ever returned a data URI instead of
     prose, the text guard must still refuse it."""
     from apps.ai.engines import ImagePayloadRejected
-    from apps.ai.engines.text_deepseek import _assert_text_only
+    from apps.ai.engines.text_openai_compatible import _assert_text_only
 
     messages = prompts.build_messages(
         tenant_name="Netswitch",
@@ -267,7 +267,11 @@ def test_the_assistant_is_told_who_it_is():
     model built by Google" - naming the vendor to a customer's employee and
     contradicting the product name shown above the message."""
     assert "You are MateAssist" in prompts.SYSTEM_PROMPT.format(tenant="Netswitch")
-    assert "do not discuss the ai model, vendor or infrastructure" in flattened()
+    # The refusal is now conditional on being asked (D-161). It used to be an
+    # unconditional standing instruction, which the model read as a preamble and
+    # volunteered on messages that had nothing to do with the platform.
+    assert "cannot share details about the underlying platform" in flattened()
+    assert "only if the user directly asks what you are" in flattened()
 
 
 def test_the_identity_rule_names_no_vendor():
@@ -374,3 +378,72 @@ def test_a_mismatched_runbook_must_lead_to_escalation_not_a_guess():
 
     assert "i don't have a runbook that covers this specific error" in system
     assert "offer the escalation route immediately" in system
+
+
+# ------------------------------------------------- escalation over streaming --
+
+
+def test_the_streamed_proposal_is_parsed_from_the_tool_call():
+    """The bridge between a reassembled tool call and the escalation card."""
+    from apps.chat.views import _escalation_proposal
+
+    proposal = _escalation_proposal(
+        [
+            {
+                "name": "escalate_via_email",
+                "arguments": '{"subject": "Adobe portal locked", "category": "Access"}',
+            }
+        ]
+    )
+
+    assert proposal["subject"] == "Adobe portal locked"
+    assert proposal["category"] == "Access"
+
+
+def test_a_truncated_tool_call_still_produces_a_proposal():
+    """Malformed JSON means the model ran out of tokens mid-object - it still
+    wanted to escalate. Discarding it would silently drop a request for help,
+    and the user would see an answer with no button and no explanation."""
+    from apps.chat.views import _escalation_proposal
+
+    proposal = _escalation_proposal(
+        [{"name": "escalate_via_email", "arguments": '{"subject": "half a subj'}]
+    )
+
+    assert proposal == {"subject": "Escalation requested"}
+
+
+def test_an_unrelated_tool_call_is_ignored():
+    from apps.chat.views import _escalation_proposal
+
+    assert _escalation_proposal([{"name": "something_else", "arguments": "{}"}]) is None
+    assert _escalation_proposal([]) is None
+    assert _escalation_proposal(None) is None
+
+
+def test_the_prompt_forbids_naming_tools_to_the_user():
+    """The model told a helpdesk user to "use the escalate_via_email tool" -
+    reading an internal function name straight out of its own instructions to
+    someone who has no idea what it means and no way to call it."""
+    system = flattened()
+
+    assert "never name a tool, function or internal mechanism in your reply" in system
+    assert "the user sees a button, not an api" in system
+
+
+def test_the_prompt_says_calling_the_tool_is_the_action():
+    """The failure mode was writing the escalation out as prose and stopping.
+    That looks like success to a reader and sends nothing."""
+    system = flattened()
+
+    assert "the tool call is the action" in system
+
+
+def test_the_identity_line_is_scoped_to_being_asked():
+    """ "Nice, send this" triggered "I cannot share details about the underlying
+    platform". The rule fired as a preamble on an unrelated message, which reads
+    as evasion and answers a question nobody asked."""
+    system = flattened()
+
+    assert "only if the user directly asks what you are" in system
+    assert "never volunteer that line otherwise" in system

@@ -5,7 +5,7 @@ THE ENGINE CONTRACT
     image and returns text, and it is called for nothing else - no chat history,
     no retrieved chunks, no reasoning.
 
-    Its output is the *only* thing that continues to DeepSeek. Bytes stop here
+    Its output is the *only* thing that continues to the text engine. Bytes stop here
     (D-042).
 """
 
