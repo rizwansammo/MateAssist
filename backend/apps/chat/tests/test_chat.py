@@ -288,3 +288,40 @@ def test_the_assistant_is_not_instructed_to_lie():
 
     assert "do not deny anything" in system
     assert "do not invent a different vendor" in system
+
+
+# ------------------------------------------- response style (D-150) ----------
+
+
+def test_the_assistant_is_told_to_acknowledge_what_was_already_tried():
+    """The complaint that prompted this rule: a user said they had deleted the
+    .dat files, and the answer began at step 1 of the same runbook."""
+    system = flattened()
+
+    assert "start by acknowledging what they have already tried" in system
+    assert "never restate a step the user has just told you they performed" in system
+
+
+def test_citations_must_be_conversational_not_paths():
+    """Source chips were removed from the UI (D-141), but the prompt still asked
+    for [Source: Title], so citations reappeared as raw text inside the answer -
+    longer and uglier than the chips that were deleted."""
+    system = flattened()
+
+    assert "name sources conversationally, never as paths" in system
+    assert "according to the globalprotect runbook" in system
+    assert "[source: title" in system, "the forbidden shape must be shown, to be forbidden"
+
+
+def test_the_escalation_route_must_come_from_the_document():
+    """Inventing a team is worse than naming none: it sends a real person to a
+    queue that does not exist."""
+    system = flattened()
+
+    assert "finish with the escalation route the document defines" in system
+    assert "never invent one" in system
+
+
+def test_a_met_escalation_criterion_beats_restarting_the_procedure():
+    system = flattened()
+    assert "escalate rather than starting the procedure again" in system

@@ -70,7 +70,19 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY --chown=mateassist:mateassist . /app/
 
-RUN mkdir -p /app/.cache /app/media && chown -R mateassist:mateassist /app/.cache /app/media
+# The volume mount point must exist IN THE IMAGE, owned by the runtime user.
+#
+# Docker initialises an empty named volume from the image's directory at that
+# exact path, ownership included. If the path is absent, Docker creates it as
+# root - and a container running as uid 10001 then cannot write there. That is
+# not a startup failure: `retrieve()` catches the error and degrades to
+# keyword-only search, so the app keeps answering with half its retrieval and
+# nothing looks broken. It cost a live deployment before it was noticed.
+#
+# The full nested path is created, not just /app/.cache, because the mount is at
+# /app/.cache/huggingface.
+RUN mkdir -p /app/.cache/huggingface /app/media \
+    && chown -R mateassist:mateassist /app/.cache /app/media
 
 USER mateassist
 
