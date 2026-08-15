@@ -219,8 +219,8 @@ def _series(queryset) -> list[dict]:
 # ------------------------------------------------------- tenant scope --------
 
 
-def tenant_summary(tenant, *, since=None, until=None) -> Summary:
-    return _summarise(_base(tenant=tenant, since=since, until=until))
+def tenant_summary(tenant, *, since=None, until=None, alias="default") -> Summary:
+    return _summarise(_base(tenant=tenant, since=since, until=until, alias=alias))
 
 
 def tenant_by_engine(tenant, *, since=None, until=None) -> list[dict]:

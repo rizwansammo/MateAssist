@@ -9,6 +9,7 @@ fails the build if one ever appears.
 from rest_framework import serializers
 
 from apps.ai.models import PROVIDER_DEFAULTS, Engine, ModelPrice, Provider, ProviderKey
+from apps.metering.models import BillingRate
 from apps.tenancy.models import Tenant
 
 
@@ -201,3 +202,24 @@ class ModelPriceSerializer(serializers.ModelSerializer):
             "currency",
             "effective_from",
         )
+
+
+class BillingRateSerializer(serializers.ModelSerializer):
+    """A sell rate. Editable, unlike a statement, which is derived."""
+
+    tenant_name = serializers.CharField(source="tenant.name", read_only=True, default=None)
+
+    class Meta:
+        model = BillingRate
+        fields = (
+            "id",
+            "tenant",
+            "tenant_name",
+            "per_1m_tokens",
+            "per_image",
+            "currency",
+            "effective_from",
+            "note",
+            "created_at",
+        )
+        read_only_fields = ("id", "tenant_name", "created_at")

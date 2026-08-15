@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { Switch } from "@mateassist/ui";
 
 import { DataState } from "../components/DataState.jsx";
+import { RevenueSection } from "../components/RevenueSection.jsx";
 import { useAdmin } from "../context/AdminContext.jsx";
 import { avatarClasses, avatarInitials } from "../lib/avatar.js";
 import { compact, money, platformApi, share } from "../lib/platform.js";
@@ -133,10 +134,13 @@ export default function BillingPage() {
       <div>
         <h1 className="mb-2 text-[28px] font-semibold tracking-tight text-ink">Usage &amp; billing</h1>
         <p className="text-sm text-slate-500">
-          Token consumption and inference cost per tenant. Costs derive from editable ModelPrice
-          rows and are stored when the call is metered, never recomputed here.
+          What each workspace is charged, and what it cost to serve them. The two are different
+          numbers: rates below are the sell price, ModelPrice rows are what providers charge us.
         </p>
       </div>
+
+      {/* Revenue first, then the cost of producing it (D-160). */}
+      <RevenueSection tenants={rows.map((row) => ({ id: row.tenant_id, name: row.tenant }))} />
 
       {totals?.unpriced_models?.length > 0 && (
         <div className="rounded-none border border-amber-300 bg-amber-50 px-5 py-3.5">

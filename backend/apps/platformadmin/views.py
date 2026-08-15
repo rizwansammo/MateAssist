@@ -8,6 +8,8 @@ that can observe more than one workspace, so it lives in one module rather than
 being spread across the apps it reports on.
 """
 
+from decimal import Decimal
+
 from django.db.models import Count
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -19,13 +21,14 @@ from rest_framework.views import APIView
 from apps.ai.models import Engine, ModelPrice, ProviderKey
 from apps.ai.probe import check_key
 from apps.audit.models import AuditEvent, Level, record
-from apps.metering import rollups
-from apps.metering.models import TenantBudget
+from apps.metering import billing, rollups
+from apps.metering.models import BillingRate, TenantBudget
 from apps.metering.serializers import AuditEventSerializer, TenantBudgetSerializer
 from apps.tenancy.models import Tenant
 
 from .permissions import IsPlatformOwner
 from .serializers import (
+    BillingRateSerializer,
     ModelPriceSerializer,
     ProviderKeyCheckSerializer,
     ProviderKeyConfigSerializer,
@@ -500,3 +503,77 @@ class TenantBudgetViewSet(viewsets.ModelViewSet):
         # Platform alias: no tenant context is armed on this surface, so the
         # default connection would report zero spend for every workspace.
         return Response(budget_api.status_for(budget.tenant, alias=rollups.PLATFORM_ALIAS))
+
+
+class BillingRateViewSet(viewsets.ModelViewSet):
+    """Sell rates: the platform default, plus per-workspace overrides (D-160).
+
+    Full CRUD deliberately, unlike provider keys. A rate carries no secret, and
+    a mistyped price that cannot be corrected is worse than one that can.
+    """
+
+    queryset = BillingRate.objects.select_related("tenant").all()
+    serializer_class = BillingRateSerializer
+    permission_classes = [IsPlatformOwner]
+
+    def perform_create(self, serializer):
+        rate = serializer.save()
+        record(
+            "billing.rate.set",
+            actor=self.request.user,
+            target=str(rate),
+            ip=_client_ip(self.request),
+            tenant_scope=rate.tenant.name if rate.tenant_id else "platform default",
+        )
+
+
+class BillingStatementView(APIView):
+    """What each workspace owes for a month (D-160).
+
+    Derived, never stored. A stored invoice is a second copy of the truth that
+    starts drifting from the usage table the moment either is corrected;
+    recomputing from events means the figure always reflects what actually
+    happened.
+    """
+
+    permission_classes = [IsPlatformOwner]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("month", str, description="YYYY-MM. Defaults to the current month."),
+            OpenApiParameter("tenant", int, description="One workspace instead of all."),
+        ]
+    )
+    def get(self, request):
+        today = timezone.localdate()
+        raw = request.query_params.get("month", "")
+        try:
+            year, month = (
+                (int(part) for part in raw.split("-", 1))
+                if raw
+                else (
+                    today.year,
+                    today.month,
+                )
+            )
+            if not 1 <= month <= 12:
+                raise ValueError
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "month must look like 2026-08."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # The platform alias: statements span every workspace, and the default
+        # connection under RLS would return one tenant's usage or none at all.
+        tenants = Tenant.objects.using(rollups.PLATFORM_ALIAS).order_by("name")
+        if request.query_params.get("tenant"):
+            tenants = tenants.filter(pk=request.query_params["tenant"])
+
+        rows = billing.statements(list(tenants), year=year, month=month)
+        return Response(
+            {
+                "period": f"{year:04d}-{month:02d}",
+                "total": str(sum((Decimal(row.get("total", "0")) for row in rows), Decimal("0"))),
+                "statements": rows,
+            }
+        )

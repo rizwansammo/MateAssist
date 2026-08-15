@@ -114,6 +114,21 @@ services:
     networks: [internal]
     volumes:
       - mateassist_hfcache:/app/.cache/huggingface
+    # Overrides the HEALTHCHECK baked into the backend image, which curls the
+    # Django health endpoint. A worker shares that image but runs no web server,
+    # so the inherited check could never pass: both Celery containers sat
+    # "unhealthy" from first boot while consuming tasks perfectly well. An
+    # always-red light is worse than none - it is the one you learn to ignore.
+    #
+    # `-d celery@$$HOSTNAME` targets THIS node. A bare `inspect ping` is
+    # satisfied by any worker answering, so a second container would report a
+    # dead one as healthy.
+    healthcheck:
+      test:         ["CMD-SHELL", "celery -A config inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval:     60s
+      timeout:      15s
+      retries:      3
+      start_period: 60s
 
   # ── Celery beat — scheduled work ────────────────────────────────────────────
   celery_beat:
@@ -125,6 +140,18 @@ services:
       postgres: {condition: service_healthy}
       redis:    {condition: service_healthy}
     networks: [internal]
+    # No healthcheck, rather than a decorative one. Beat answers no inspect
+    # protocol - it only publishes - and it runs as PID 1, so if it dies the
+    # container dies and `restart: unless-stopped` brings it back. A liveness
+    # probe would therefore report exactly what Docker already knows.
+    #
+    # Disabled explicitly because the backend image bakes in an HTTP check
+    # (backend/Dockerfile) that beat inherits and can never pass: it ran no web
+    # server, so it sat "unhealthy" from first boot while scheduling correctly.
+    # A permanently red light is worse than none - it is the one you stop
+    # reading.
+    healthcheck:
+      disable: true
 
   # ── Portal SPA — served on every tenant subdomain ───────────────────────────
   portal:

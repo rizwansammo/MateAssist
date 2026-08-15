@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from apps.ai.models import Engine, ModelPrice
 from apps.tenancy.managers import TenantScopedModel
@@ -98,6 +99,86 @@ class TenantBudget(models.Model):
 def price_for(engine: str, model: str) -> ModelPrice | None:
     """Most recent price point for a model, or None if unpriced."""
     return ModelPrice.objects.filter(engine=engine, model=model).order_by("-effective_from").first()
+
+
+class BillingRate(models.Model):
+    """What a workspace is CHARGED per unit (D-160).
+
+    Not to be confused with `ModelPrice`, which is what the platform PAYS its
+    providers. Both are money per token and they are never the same number: the
+    gap between them is the margin. Keeping them in one table would make it
+    impossible to change a sell price without appearing to restate historical
+    provider cost, or to absorb a provider increase without repricing customers.
+
+    A null tenant is the default that applies to every workspace. A row with a
+    tenant overrides it for that workspace alone, which is how a negotiated
+    price is expressed without a second mechanism.
+
+    `effective_from` makes this a history rather than a setting. Editing a rate
+    in place would silently restate every invoice ever produced - a customer who
+    queries last month's bill must be able to be shown the rate that was in
+    force when the tokens were spent, not the one in force today.
+    """
+
+    tenant = models.ForeignKey(
+        "tenancy.Tenant",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="billing_rates",
+        help_text="Blank applies to every workspace. Set it to override one.",
+    )
+
+    per_1m_tokens = models.DecimalField(
+        max_digits=10,
+        decimal_places=4,
+        default=Decimal("0"),
+        help_text="Charged per 1,000,000 tokens, prompt and completion together.",
+    )
+    per_image = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        default=Decimal("0"),
+        help_text="Charged per screenshot read by the vision engine.",
+    )
+    currency = models.CharField(max_length=3, default="USD")
+    effective_from = models.DateField(default=timezone.localdate)
+    note = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("tenant__name", "-effective_from")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "effective_from"], name="uniq_billing_rate_point"
+            )
+        ]
+
+    def __str__(self) -> str:
+        who = self.tenant.name if self.tenant_id else "platform default"
+        return f"{who} from {self.effective_from}: {self.per_1m_tokens}/1M"
+
+
+def rate_for(tenant, *, on=None) -> BillingRate | None:
+    """The rate in force for a workspace on a given day.
+
+    Tenant-specific first, then the platform default; within each, the latest
+    row that had already taken effect. Returns None when nothing has been
+    configured at all, which the caller must treat as "cannot bill yet" rather
+    than as zero - a bill of $0.00 and a bill that could not be calculated look
+    identical on a dashboard and mean opposite things.
+    """
+    on = on or timezone.localdate()
+
+    for scope in ({"tenant": tenant}, {"tenant__isnull": True}):
+        rate = (
+            BillingRate.objects.filter(effective_from__lte=on, **scope)
+            .order_by("-effective_from")
+            .first()
+        )
+        if rate is not None:
+            return rate
+    return None
 
 
 def compute_cost(engine: str, model: str, *, prompt_tokens=0, completion_tokens=0, images=0):

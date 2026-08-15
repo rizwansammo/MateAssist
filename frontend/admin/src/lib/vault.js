@@ -53,5 +53,19 @@ export const vaultApi = {
   revoke: (id) => apiFetch(`/platform/keys/${id}/revoke/`, { method: "POST" }),
   purge: (id) => apiFetch(`/platform/keys/${id}/`, { method: "DELETE" }),
 
-  prices: () => apiFetch("/platform/prices/")
+  prices: () => apiFetch("/platform/prices/"),
+
+  // ---- billing (D-160) ----
+  //
+  // Separate from `prices`, which is what the platform PAYS providers. These
+  // are what workspaces are CHARGED. Two endpoints because they are two
+  // different numbers, and the gap between them is the margin.
+  billingRates: () => apiFetch("/platform/billing-rates/"),
+  saveBillingRate: (rate) =>
+    apiFetch("/platform/billing-rates/", { method: "POST", body: rate }),
+  deleteBillingRate: (id) =>
+    apiFetch(`/platform/billing-rates/${id}/`, { method: "DELETE" }),
+
+  /** Derived, never stored - always recomputed from the usage events. */
+  statements: (month) => apiFetch(`/platform/statements/?month=${month}`)
 };
