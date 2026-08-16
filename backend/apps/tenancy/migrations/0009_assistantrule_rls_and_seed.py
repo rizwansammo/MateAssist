@@ -39,21 +39,31 @@ def split_existing_instructions(apps, schema_editor):
     and splitting every line would turn a two-line rule into two half-rules that
     each read as nonsense.
 
-    Runs on the migration connection, which is the owner role and bypasses RLS -
-    so it can see every workspace's row, which is exactly what a data migration
-    needs and what a request must never have.
+    EVERY query here must name `schema_editor.connection.alias`.
+
+    Migrations run on the `admin` alias, because the default connection is the
+    under-privileged RLS role and cannot alter tables. A bare `.objects` query
+    inside RunPython uses the DEFAULT connection instead - a second, separate
+    session. This migration takes an ACCESS EXCLUSIVE lock on the table in the
+    admin transaction, so a default-connection INSERT then waits for a lock its
+    own migration is holding, and waits forever.
+
+    That is exactly what happened in production: the ALTER sat idle in
+    transaction for over an hour while the INSERT queued behind it, the deploy
+    appeared to be an SSH failure, and the table was left with no RLS policy.
     """
+    database = schema_editor.connection.alias
     Tenant = apps.get_model("tenancy", "Tenant")
     AssistantRule = apps.get_model("tenancy", "AssistantRule")
 
-    for tenant in Tenant.objects.exclude(assistant_instructions="").iterator():
+    for tenant in Tenant.objects.using(database).exclude(assistant_instructions="").iterator():
         chunks = [
             chunk.strip()
             for chunk in tenant.assistant_instructions.replace("\r\n", "\n").split("\n\n")
         ]
         rules = [chunk for chunk in chunks if chunk]
 
-        AssistantRule.objects.bulk_create(
+        AssistantRule.objects.using(database).bulk_create(
             [
                 AssistantRule(tenant=tenant, text=text[:500], enabled=True, position=index)
                 for index, text in enumerate(rules)
@@ -66,16 +76,23 @@ def rejoin_into_instructions(apps, schema_editor):
 
     Without this the migration is one-way, and a rollback would leave a
     workspace with no instructions at all rather than the ones it started with.
+
+    Same connection rule as the forward direction: a rollback also drops the RLS
+    policy under an exclusive lock, so reading on the default connection would
+    deadlock against it in exactly the same way.
     """
+    database = schema_editor.connection.alias
     Tenant = apps.get_model("tenancy", "Tenant")
     AssistantRule = apps.get_model("tenancy", "AssistantRule")
 
-    for tenant in Tenant.objects.iterator():
-        rules = AssistantRule.objects.filter(tenant=tenant).order_by("position", "id")
+    for tenant in Tenant.objects.using(database).iterator():
+        rules = (
+            AssistantRule.objects.using(database).filter(tenant=tenant).order_by("position", "id")
+        )
         text = "\n\n".join(rule.text for rule in rules)
         if text:
             tenant.assistant_instructions = text[:4000]
-            tenant.save(update_fields=["assistant_instructions"])
+            tenant.save(using=database, update_fields=["assistant_instructions"])
 
 
 class Migration(migrations.Migration):
