@@ -226,3 +226,125 @@ def test_a_user_with_no_name_still_produces_a_usable_ticket(world):
     body = outbox()[0].body
 
     assert "no address on file" not in body
+
+
+# --------------------------------------------- screenshots on the email -----
+
+
+def attach_screenshot(world, *, key, size=1024, monkeypatch_store=None):
+    """A user message carrying a screenshot in the conversation."""
+    from apps.chat.models import Message
+    from apps.chat.models import Role as MessageRole
+
+    tenant = world["conversation"].tenant
+    set_db_tenant(tenant.id)
+    Message.all_objects.create(
+        tenant=tenant,
+        conversation=world["conversation"],
+        role=MessageRole.USER,
+        text="here is the error",
+        attachment_key=key,
+        attachment_description="A PowerShell error dialog.",
+    )
+    set_db_tenant(None)
+    if monkeypatch_store is not None:
+        monkeypatch_store[key] = b"x" * size
+
+
+@pytest.fixture
+def store(monkeypatch):
+    """An in-memory object store, so these tests exercise the escalation rather
+    than MinIO."""
+    from apps.knowledge import storage
+
+    contents = {}
+    monkeypatch.setattr(storage, "get", lambda key: contents[key])
+    return contents
+
+
+def test_screenshots_are_attached_to_the_escalation(world, store):
+    """The engineer sees the error dialog, not only a description of it."""
+    attach_screenshot(world, key="alpha/1/first.png", monkeypatch_store=store)
+    attach_screenshot(world, key="alpha/1/second.png", monkeypatch_store=store)
+
+    escalate(world)
+    message = outbox()[0]
+
+    assert [name for name, _, _ in message.attachments] == [
+        "screenshot-1.png",
+        "screenshot-2.png",
+    ]
+    assert message.attachments[0][2] == "image/png"
+
+
+def test_attachments_are_named_without_the_storage_key(world, store):
+    """The key carries the tenant id and a UUID, neither of which belongs in a
+    helpdesk queue."""
+    attach_screenshot(world, key="alpha/1/6f2c-secret-name.png", monkeypatch_store=store)
+
+    escalate(world)
+
+    assert "6f2c-secret-name" not in outbox()[0].attachments[0][0]
+
+
+def test_the_body_lists_what_was_attached(world, store):
+    attach_screenshot(world, key="alpha/1/one.png", size=4096, monkeypatch_store=store)
+
+    escalate(world)
+
+    assert "ATTACHMENTS" in outbox()[0].body
+    assert "screenshot-1.png" in outbox()[0].body
+
+
+def test_oversized_screenshots_are_dropped_and_declared(world, store, settings):
+    """Silently dropping one leaves an engineer reading a transcript that
+    mentions an image they never received."""
+    settings.ESCALATION_ATTACHMENT_BUDGET = 5_000
+    attach_screenshot(world, key="alpha/1/small.png", size=1_000, monkeypatch_store=store)
+    attach_screenshot(world, key="alpha/1/huge.png", size=90_000, monkeypatch_store=store)
+
+    escalate(world)
+    message = outbox()[0]
+
+    assert len(message.attachments) == 1
+    assert "not attached" in message.body
+
+
+def test_the_oldest_screenshot_survives_the_budget(world, store, settings):
+    """The first image is usually the error that started the conversation."""
+    settings.ESCALATION_ATTACHMENT_BUDGET = 1_500
+    attach_screenshot(world, key="alpha/1/first.png", size=1_000, monkeypatch_store=store)
+    attach_screenshot(world, key="alpha/1/later.png", size=1_000, monkeypatch_store=store)
+
+    escalate(world)
+
+    assert len(outbox()[0].attachments) == 1
+    assert outbox()[0].attachments[0][1] == b"x" * 1_000
+
+
+def test_an_unreadable_screenshot_does_not_lose_the_escalation(world, store):
+    """The user's problem reaching a human matters more than the picture."""
+    attach_screenshot(world, key="alpha/1/missing.png")  # never put in the store
+
+    response = escalate(world)
+
+    assert response.status_code == 200
+    assert len(outbox()) == 1
+    assert outbox()[0].attachments == []
+
+
+def test_a_conversation_with_no_screenshots_sends_a_clean_email(world):
+    escalate(world)
+
+    assert outbox()[0].attachments == []
+    assert "ATTACHMENTS" not in outbox()[0].body
+
+
+def test_the_transcription_is_kept_alongside_the_image(world, store):
+    """Some helpdesks strip attachments, and text is searchable in a queue
+    where an image is not."""
+    attach_screenshot(world, key="alpha/1/one.png", monkeypatch_store=store)
+
+    escalate(world)
+
+    assert "A PowerShell error dialog." in outbox()[0].body

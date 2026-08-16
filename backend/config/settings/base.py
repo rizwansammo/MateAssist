@@ -208,6 +208,15 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="mateassist@localhost")
 # Used when a tenant has no support_email of its own (D-128).
 DEFAULT_SUPPORT_EMAIL = env("DEFAULT_SUPPORT_EMAIL", default="")
 
+# Raw bytes of screenshots attached to one escalation (D-174).
+#
+# 18MB, not 25MB, deliberately. Attachments are base64-encoded in transit, which
+# inflates them by roughly a third - so 25MB of files becomes about 34MB on the
+# wire and a 25MB gateway rejects the ENTIRE message. The escalation is then
+# lost rather than truncated, which is the one outcome this feature must not
+# produce.
+ESCALATION_ATTACHMENT_BUDGET = env.int("ESCALATION_ATTACHMENT_BUDGET", default=18 * 1024 * 1024)
+
 # ------------------------------------------------------------- celery -------
 
 CELERY_BROKER_URL = env("CELERY_BROKER_URL")

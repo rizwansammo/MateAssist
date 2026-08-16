@@ -18,6 +18,7 @@ from django.core.mail import EmailMessage
 from django.utils import timezone
 
 from apps.audit.models import Level, record
+from apps.knowledge import storage
 from apps.tenancy import mail
 
 from .models import Message
@@ -44,10 +45,31 @@ RAISED      {timestamp}
 --- TRANSCRIPT ----------------------------------------------------------
 {transcript}
 
---
+{attachment_note}--
 Sent by MateAssist on behalf of {user}.
 Reply to this email, or write to {user_email} directly.
 """
+
+
+def _attachment_note(attachments, omitted: int) -> str:
+    """Say what was attached, and admit what was not.
+
+    Silently dropping a screenshot over the size budget would leave an engineer
+    reading a transcript that mentions an image they never received, and no way
+    to know it existed.
+    """
+    if not attachments and not omitted:
+        return ""
+
+    lines = ["--- ATTACHMENTS ---------------------------------------------------------"]
+    for filename, data, _ in attachments:
+        lines.append(f"{filename}  ({len(data) // 1024} KB)")
+    if omitted:
+        lines.append(
+            f"({omitted} more screenshot(s) not attached - the message would have been "
+            f"too large to deliver. Ask the user to send them directly.)"
+        )
+    return "\n".join(lines) + "\n\n"
 
 
 def _render_transcript(messages) -> str:
@@ -71,6 +93,65 @@ def _render_transcript(messages) -> str:
 #
 # Citations are still stored on every message, so a platform admin can still
 # answer "which document produced this?" when an answer turns out to be wrong.
+
+
+_MIME_BY_SUFFIX = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+}
+
+
+def collect_attachments(messages) -> tuple[list[tuple[str, bytes, str]], int]:
+    """Every screenshot in the conversation, oldest first, within budget (D-174).
+
+    Returns the files to attach and how many were left out.
+
+    Oldest first because the first screenshot is usually the error that started
+    the conversation - the one an engineer needs. Newest-first would drop it in
+    favour of a follow-up detail.
+
+    A file that cannot be read is skipped, never fatal. The user's problem
+    reaching a human matters more than the picture of it, and an escalation that
+    fails because object storage hiccupped helps nobody.
+
+    Filenames are sequential rather than the storage key, which carries the
+    tenant id and a UUID - neither of which belongs in a helpdesk queue.
+    """
+    budget = getattr(settings, "ESCALATION_ATTACHMENT_BUDGET", 18 * 1024 * 1024)
+    files: list[tuple[str, bytes, str]] = []
+    used = 0
+    omitted = 0
+
+    for message in messages:
+        key = getattr(message, "attachment_key", "")
+        if not key:
+            continue
+
+        try:
+            data = storage.get(key)
+        except Exception:  # noqa: BLE001
+            logger.warning("escalation could not read attachment %s", key)
+            omitted += 1
+            continue
+
+        if used + len(data) > budget:
+            omitted += 1
+            continue
+
+        suffix = key.rsplit(".", 1)[-1].lower()
+        files.append(
+            (
+                f"screenshot-{len(files) + 1}.{suffix or 'png'}",
+                data,
+                _MIME_BY_SUFFIX.get(suffix, "application/octet-stream"),
+            )
+        )
+        used += len(data)
+
+    return files, omitted
 
 
 def resolve_recipient(tenant) -> str:
@@ -111,6 +192,8 @@ def send_escalation(*, tenant, user, conversation, proposal: dict) -> dict:
     subject = (proposal.get("subject") or "IT issue escalated from MateAssist").strip()
 
     user_email = getattr(user, "email", "") or ""
+    attachments, omitted = collect_attachments(messages)
+
     body = BODY_TEMPLATE.format(
         tenant=tenant.name,
         user=getattr(user, "display_name", None) or user_email or "unknown",
@@ -119,6 +202,7 @@ def send_escalation(*, tenant, user, conversation, proposal: dict) -> dict:
         timestamp=timezone.now().strftime("%Y-%m-%d %H:%M UTC"),
         summary=proposal.get("summary") or "(no summary provided)",
         transcript=_render_transcript(messages),
+        attachment_note=_attachment_note(attachments, omitted),
     )
 
     # Sent through the WORKSPACE's own mail server when it has one (D-154).
@@ -138,6 +222,9 @@ def send_escalation(*, tenant, user, conversation, proposal: dict) -> dict:
         reply_to=[user.email] if getattr(user, "email", None) else None,
         connection=mail.connection_for(tenant),
     )
+
+    for filename, data, content_type in attachments:
+        email.attach(filename, data, content_type)
 
     try:
         email.send(fail_silently=False)
