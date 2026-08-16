@@ -129,15 +129,17 @@ def test_budget_status_reports_real_spend_from_the_platform_surface(two_workspac
 
     alpha, _ = two_workspaces
     TenantBudget.objects.using(rollups.PLATFORM_ALIAS).create(
-        tenant=alpha, monthly_usd=Decimal("10.00"), enforce=False
+        tenant=alpha, monthly_tokens=10_000, enforce=False
     )
     set_db_tenant(None)
 
     blind = budgets.status_for(alpha)
     seeing = budgets.status_for(alpha, alias=rollups.PLATFORM_ALIAS)
 
-    assert blind["spent_usd"] == "0"
-    assert seeing["spent_usd"] == "3.000000"
+    # Alpha has two events of 1500 tokens each. On the default connection RLS
+    # hides them from a platform caller, which is the failure this pins.
+    assert blind["spent_tokens"] == 0
+    assert seeing["spent_tokens"] == 3_000
     assert seeing["percent_used"] == 30.0
 
 

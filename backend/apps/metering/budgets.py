@@ -1,11 +1,17 @@
-"""Budget enforcement (D-113).
+"""Budget enforcement (D-113, revised D-172).
 
-A spend cap is only meaningful if it is checked on the path that spends money.
+Caps are counted in TOKENS. They were counted in provider dollars, which is a
+figure that stays at zero unless someone has entered every provider's price
+list - so the cap never fired and the feature looked configured while doing
+nothing. Tokens are measured directly on every call and are the unit the
+product is sold in.
+
+A cap is only meaningful if it is checked on the path that spends the budget.
 That path is `router._call_with_pool`, so the check lives here and is called from
 there - not in a view, where a background task or a management command would
 walk straight past it.
 
-**Why this is not cached.** Month-to-date spend is one indexed aggregate over
+**Why this is not cached.** Month-to-date usage is one indexed aggregate over
 `(tenant, -created_at)` and it runs only when an enforcing budget exists. A cache
 would make the check cheaper and also make it wrong: a 60-second stale figure is
 60 seconds of unbounded overspend, which is precisely the thing the cap exists to
@@ -13,8 +19,6 @@ prevent. Correctness wins over a query that the index already answers quickly.
 """
 
 from __future__ import annotations
-
-from decimal import Decimal
 
 
 class BudgetExceeded(Exception):
@@ -25,12 +29,12 @@ class BudgetExceeded(Exception):
     files a support ticket that costs more than the overage did.
     """
 
-    def __init__(self, *, tenant, spent: Decimal, cap: Decimal):
+    def __init__(self, *, tenant, spent: int, cap: int):
         self.tenant = tenant
         self.spent = spent
         self.cap = cap
         super().__init__(
-            f"{tenant} has spent ${spent} of its ${cap} monthly budget. "
+            f"{tenant} has used {spent:,} of its {cap:,} monthly tokens. "
             f"Raise the cap or disable enforcement to continue."
         )
 
@@ -54,22 +58,22 @@ def status_for(tenant, *, alias="default") -> dict | None:
     return zero spend for every workspace - a dashboard that is confidently
     wrong rather than visibly broken.
     """
-    from .rollups import month_to_date_cost
+    from .rollups import month_to_date_tokens
 
     budget = budget_for(tenant, alias=alias)
     if budget is None:
         return None
 
-    spent = month_to_date_cost(tenant, alias=alias)
-    percent = float(spent / budget.monthly_usd * 100) if budget.is_capped else 0.0
+    spent = month_to_date_tokens(tenant, alias=alias)
+    percent = (spent / budget.monthly_tokens * 100) if budget.is_capped else 0.0
     return {
-        "monthly_usd": str(budget.monthly_usd),
-        "spent_usd": str(spent),
+        "monthly_tokens": budget.monthly_tokens,
+        "spent_tokens": spent,
         "percent_used": round(percent, 2),
         "enforce": budget.enforce,
         "alert_at_percent": budget.alert_at_percent,
         "alerting": budget.is_capped and percent >= budget.alert_at_percent,
-        "exceeded": budget.is_capped and spent >= budget.monthly_usd,
+        "exceeded": budget.is_capped and spent >= budget.monthly_tokens,
     }
 
 
@@ -82,14 +86,14 @@ def assert_within_budget(tenant) -> None:
     """
     from apps.audit.models import Level, record
 
-    from .rollups import month_to_date_cost
+    from .rollups import month_to_date_tokens
 
     budget = budget_for(tenant)
     if budget is None or not budget.enforce or not budget.is_capped:
         return
 
-    spent = month_to_date_cost(tenant)
-    if spent < budget.monthly_usd:
+    spent = month_to_date_tokens(tenant)
+    if spent < budget.monthly_tokens:
         return
 
     # Audited, because a workspace being cut off is an operational event someone
@@ -99,7 +103,7 @@ def assert_within_budget(tenant) -> None:
         tenant=tenant,
         level=Level.WARN,
         target=str(tenant),
-        spent_usd=str(spent),
-        cap_usd=str(budget.monthly_usd),
+        spent_tokens=spent,
+        cap_tokens=budget.monthly_tokens,
     )
-    raise BudgetExceeded(tenant=tenant, spent=spent, cap=budget.monthly_usd)
+    raise BudgetExceeded(tenant=tenant, spent=spent, cap=budget.monthly_tokens)

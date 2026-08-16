@@ -41,8 +41,12 @@ export default function BillingPage() {
   const rows = spend.data?.tenants ?? [];
   const totals = spend.data?.totals;
   const byEngine = usage.data?.by_engine ?? [];
-  const topSpend = Number(rows[0]?.cost_usd ?? 0);
-  const engineMax = Math.max(...byEngine.map((e) => Number(e.cost_usd ?? 0)), 0);
+  // Tokens, matching what the bars beside each workspace now measure. Left on
+  // cost it would be zero for every row, sizing every uncapped bar full width.
+  const topSpend = Number(rows[0]?.total_tokens ?? 0);
+  // Scaled by tokens, because that is what the bars now measure. Leaving this
+  // on cost would size every bar against 0 and render them all full width.
+  const engineMax = Math.max(...byEngine.map((e) => Number(e.total_tokens ?? 0)), 0);
 
   const budgetList = useMemo(() => {
     const payload = budgets.data;
@@ -71,7 +75,7 @@ export default function BillingPage() {
       try {
         await platformApi.saveBudget({
           id: existing.id,
-          monthly_usd: existing.monthly_usd,
+          monthly_tokens: existing.monthly_tokens,
           enforce: !existing.enforce,
           alert_at_percent: existing.alert_at_percent
         });
@@ -81,7 +85,7 @@ export default function BillingPage() {
           `${row.tenant_name} - ${
             existing.enforce
               ? "the cap is now advisory"
-              : `calls stop at ${money(existing.monthly_usd)}`
+              : `calls stop at ${compact(existing.monthly_tokens)} tokens`
           }`,
           existing.enforce ? "warn" : "ok"
         );
@@ -97,15 +101,18 @@ export default function BillingPage() {
   const setCap = useCallback(
     async (row) => {
       const existing = budgetFor(row.tenant_id);
+      // Tokens, not dollars (D-172). The dollar cap measured provider cost,
+      // which stays at zero without price rows nobody had entered - so it never
+      // fired. Tokens are counted on every call, so this cap actually bites.
       const entered = window.prompt(
-        `Monthly cap for ${row.tenant_name}, in USD.\n\nZero means no limit. A cap is advisory until enforcement is switched on.`,
-        existing?.monthly_usd ?? "50.00"
+        `Monthly token cap for ${row.tenant_name}.\n\nZero means no limit. A cap is advisory until enforcement is switched on.`,
+        existing?.monthly_tokens ?? "5000000"
       );
       if (entered === null) return;
 
-      const amount = Number(entered);
+      const amount = Math.floor(Number(entered));
       if (!Number.isFinite(amount) || amount < 0) {
-        notify("Not a valid amount", "Enter a number of dollars, or 0 for no limit.", "warn");
+        notify("Not a valid number", "Enter a number of tokens, or 0 for no limit.", "warn");
         return;
       }
 
@@ -114,12 +121,12 @@ export default function BillingPage() {
         await platformApi.saveBudget({
           id: existing?.id,
           tenant: row.tenant_id,
-          monthly_usd: amount.toFixed(2),
+          monthly_tokens: amount,
           enforce: existing?.enforce ?? false,
           alert_at_percent: existing?.alert_at_percent ?? 80
         });
         budgets.reload();
-        notify("Budget saved", `${row.tenant_name} - cap ${money(amount)} per month`);
+        notify("Budget saved", `${row.tenant_name} - cap ${compact(amount)} tokens per month`);
       } catch (cause) {
         notify("Could not save budget", cause?.message ?? "The change was not saved.", "warn");
       } finally {
@@ -134,8 +141,7 @@ export default function BillingPage() {
       <div>
         <h1 className="mb-2 text-[28px] font-semibold tracking-tight text-ink">Usage &amp; billing</h1>
         <p className="text-sm text-slate-500">
-          What each workspace is charged, and what it cost to serve them. The two are different
-          numbers: rates below are the sell price, ModelPrice rows are what providers charge us.
+          What each workspace is charged, and the rates that produce it.
         </p>
       </div>
 
@@ -148,20 +154,6 @@ export default function BillingPage() {
         tenants={rows.map((row) => ({ id: row.tenant_id, name: row.tenant_name }))}
       />
 
-      {totals?.unpriced_models?.length > 0 && (
-        <div className="rounded-none border border-amber-300 bg-amber-50 px-5 py-3.5">
-          <div className="text-[13px] font-semibold text-amber-900">
-            {totals.unpriced_models.length} model(s) have no price, so their calls record $0.00
-          </div>
-          <div className="mt-1 font-mono text-[12px] text-amber-800">
-            {totals.unpriced_models.join(", ")}
-          </div>
-          <div className="mt-1.5 text-[12px] leading-relaxed text-amber-800">
-            Cost is stored when a call is metered, so adding a rate now will not reprice traffic
-            already recorded. Set rates before the traffic arrives.
-          </div>
-        </div>
-      )}
 
       <div className="grid gap-5 xl:grid-cols-[1.35fr_1fr]">
         <div className="rounded-none border border-hairline bg-white p-6">
@@ -175,11 +167,18 @@ export default function BillingPage() {
             <>
               <div className="flex flex-wrap items-end justify-between gap-4">
                 <div>
+                  {/* Volume, not spend (D-171). What the platform paid its
+                      providers is already in Groq's and Google's own dashboards,
+                      owned by whoever bought the keys - repeating it here added
+                      a number that was only ever as accurate as the price rows
+                      someone remembered to fill in. Token and call counts are
+                      the figures MateAssist is the only place to see. */}
                   <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                    Platform spend - {range.toLowerCase()}
+                    Platform usage - {range.toLowerCase()}
                   </div>
                   <div className="mt-2 text-4xl font-semibold tracking-tight text-ink">
-                    {money(totals?.cost_usd)}
+                    {compact(totals?.total_tokens)}
+                    <span className="ml-2 text-lg font-medium text-slate-400">tokens</span>
                   </div>
                 </div>
                 <div className="text-right">
@@ -193,7 +192,7 @@ export default function BillingPage() {
               </div>
               <div className="mt-5 grid grid-cols-2 gap-px border border-hairline bg-hairline">
                 {[
-                  ["Tokens", compact(totals?.total_tokens), "text-ink"],
+                  ["Requests", String(totals?.requests ?? 0), "text-ink"],
                   ["Prompt / completion", `${compact(totals?.prompt_tokens)} / ${compact(totals?.completion_tokens)}`, "text-ink"],
                   ["Avg latency", `${totals?.avg_latency_ms ?? 0} ms`, "text-ink"],
                   ["Failed calls", String(totals?.failed ?? 0), totals?.failed ? "text-amber-700" : "text-emerald-700"]
@@ -212,7 +211,7 @@ export default function BillingPage() {
 
         <div className="flex flex-col gap-3.5 rounded-none border border-hairline bg-white p-6">
           <div>
-            <div className="text-[15px] font-semibold text-ink">Cost by engine</div>
+            <div className="text-[15px] font-semibold text-ink">Usage by engine</div>
             <div className="mt-0.5 text-[12.5px] text-slate-500">
               Two roles. The vendor behind each is configuration (A-010).
             </div>
@@ -236,16 +235,18 @@ export default function BillingPage() {
                     <span className="font-medium text-ink">
                       {ENGINE_LABEL[row.engine] ?? row.engine}
                     </span>
-                    <span className="font-mono text-slate-600">{money(row.cost_usd)}</span>
+                    <span className="font-mono text-slate-600">
+                      {compact(row.total_tokens)} tokens
+                    </span>
                   </div>
                   <div className="mt-1.5 h-2 rounded-none bg-slate-100">
                     <div
                       className={`h-2 rounded-none ${ENGINE_BAR[row.engine] ?? "bg-slate-500"}`}
-                      style={{ width: share(row.cost_usd, engineMax) }}
+                      style={{ width: share(row.total_tokens, engineMax) }}
                     />
                   </div>
                   <div className="mt-1 text-[11.5px] text-slate-400">
-                    {compact(row.total_tokens)} tokens - {row.requests} calls
+                    {row.requests} call{row.requests === 1 ? "" : "s"}
                   </div>
                 </div>
               ))}
@@ -299,8 +300,8 @@ export default function BillingPage() {
           <div className="px-6 pb-5 pt-2">
             {rows.map((row) => {
               const budget = budgetFor(row.tenant_id);
-              const cap = Number(budget?.monthly_usd ?? 0);
-              const spent = Number(row.cost_usd ?? 0);
+              const cap = Number(budget?.monthly_tokens ?? 0);
+              const spent = Number(row.total_tokens ?? 0);
               const over = cap > 0 && spent >= cap;
               const alerting = cap > 0 && !over && spent >= (cap * (budget?.alert_at_percent ?? 80)) / 100;
 
@@ -328,10 +329,9 @@ export default function BillingPage() {
                       {[
                         ["Tokens", compact(row.total_tokens), "text-ink"],
                         ["Calls", String(row.requests), "text-ink"],
-                        ["Cost", money(row.cost_usd), "text-ink"],
                         [
                           "Cap",
-                          cap > 0 ? money(cap) : "none",
+                          cap > 0 ? `${compact(cap)} tokens` : "none",
                           over ? "text-red-700" : alerting ? "text-amber-700" : "text-slate-500"
                         ]
                       ].map(([label, value, cls]) => (

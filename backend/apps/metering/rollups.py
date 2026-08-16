@@ -260,6 +260,20 @@ def month_to_date_cost(tenant, *, alias="default") -> Decimal:
     return row["total"]
 
 
+def month_to_date_tokens(tenant, *, alias="default") -> int:
+    """Tokens used since the start of the billing month.
+
+    `alias` is load-bearing for the same reason as the cost version above: a
+    platform owner has no tenant armed, so on the default connection RLS would
+    report zero for every workspace.
+    """
+    row = _base(tenant=tenant, since=month_start(), alias=alias).aggregate(
+        prompt=Coalesce(Sum("prompt_tokens"), 0),
+        completion=Coalesce(Sum("completion_tokens"), 0),
+    )
+    return int(row["prompt"]) + int(row["completion"])
+
+
 # ----------------------------------------------------- platform scope --------
 # Everything below reads across tenants on the RLS-bypassing connection.
 
@@ -298,6 +312,6 @@ def platform_by_tenant(*, since=None, until=None) -> list[dict]:
     }
     for row in rows:
         budget = budgets.get(row["tenant_id"])
-        row["monthly_budget_usd"] = str(budget.monthly_usd) if budget else None
+        row["monthly_budget_tokens"] = budget.monthly_tokens if budget else None
         row["budget_enforced"] = bool(budget and budget.enforce)
     return rows

@@ -17,7 +17,7 @@ class TenantBudgetSerializer(serializers.ModelSerializer):
             "tenant",
             "tenant_name",
             "tenant_slug",
-            "monthly_usd",
+            "monthly_tokens",
             "enforce",
             "alert_at_percent",
             "is_capped",
@@ -25,7 +25,7 @@ class TenantBudgetSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "updated_at"]
 
-    def validate_monthly_usd(self, value):
+    def validate_monthly_tokens(self, value):
         if value < 0:
             raise serializers.ValidationError("A budget cannot be negative.")
         return value

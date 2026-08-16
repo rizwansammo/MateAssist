@@ -195,7 +195,7 @@ class Command(BaseCommand):
 
         budget, _ = TenantBudget.objects.using(rollups.PLATFORM_ALIAS).update_or_create(
             tenant=alpha,
-            defaults={"monthly_usd": Decimal("1.00"), "enforce": False},
+            defaults={"monthly_tokens": 50_000, "enforce": False},
         )
 
         with tenant_context(alpha.id), transaction.atomic():
@@ -219,8 +219,8 @@ class Command(BaseCommand):
 
             # A zero cap means "no limit", not "spend nothing" - otherwise
             # creating a budget row would cut a workspace off instantly.
-            budget.monthly_usd = Decimal("0")
-            budget.save(update_fields=["monthly_usd"])
+            budget.monthly_tokens = 0
+            budget.save(update_fields=["monthly_tokens"])
             try:
                 budgets.assert_within_budget(alpha)
                 self.ok("a zero cap means no limit rather than a total outage")

@@ -214,32 +214,33 @@ def spent_workspace():
 def test_an_advisory_budget_blocks_nothing(spent_workspace):
     """`enforce` defaults to False so that adding a budget is an observation,
     not an outage."""
-    TenantBudget.objects.create(tenant=spent_workspace, monthly_usd=Decimal("5.00"), enforce=False)
+    TenantBudget.objects.create(tenant=spent_workspace, monthly_tokens=1_000, enforce=False)
 
     budgets.assert_within_budget(spent_workspace)  # must not raise
 
 
 def test_an_enforced_budget_refuses_the_call_once_it_is_reached(spent_workspace):
-    TenantBudget.objects.create(tenant=spent_workspace, monthly_usd=Decimal("5.00"), enforce=True)
+    TenantBudget.objects.create(tenant=spent_workspace, monthly_tokens=1_000, enforce=True)
 
     with pytest.raises(budgets.BudgetExceeded) as excinfo:
         budgets.assert_within_budget(spent_workspace)
 
     # The figures travel with the exception so the API can say why, rather than
     # leaving a user with an unexplained dead assistant.
-    assert excinfo.value.spent == Decimal("10.000000")
-    assert excinfo.value.cap == Decimal("5.00")
+    # 1000 prompt + 500 completion from the fixture, against a 1000 cap.
+    assert excinfo.value.spent == 1_500
+    assert excinfo.value.cap == 1_000
 
 
 def test_an_enforced_budget_allows_calls_below_the_cap(spent_workspace):
-    TenantBudget.objects.create(tenant=spent_workspace, monthly_usd=Decimal("50.00"), enforce=True)
+    TenantBudget.objects.create(tenant=spent_workspace, monthly_tokens=10_000, enforce=True)
     budgets.assert_within_budget(spent_workspace)  # must not raise
 
 
 def test_a_zero_cap_means_no_limit_rather_than_spend_nothing(spent_workspace):
     """Otherwise creating a budget row would cut a workspace off before the
     admin had typed a figure."""
-    TenantBudget.objects.create(tenant=spent_workspace, monthly_usd=Decimal("0"), enforce=True)
+    TenantBudget.objects.create(tenant=spent_workspace, monthly_tokens=0, enforce=True)
     budgets.assert_within_budget(spent_workspace)  # must not raise
 
 
@@ -250,14 +251,14 @@ def test_a_workspace_with_no_budget_is_never_blocked(spent_workspace):
 def test_budget_status_reports_percentage_and_alert_state(spent_workspace):
     TenantBudget.objects.create(
         tenant=spent_workspace,
-        monthly_usd=Decimal("20.00"),
+        monthly_tokens=3_000,
         enforce=True,
         alert_at_percent=40,
     )
 
     status = budgets.status_for(spent_workspace)
 
-    assert status["spent_usd"] == "10.000000"
+    assert status["spent_tokens"] == 1_500
     assert status["percent_used"] == 50.0
     assert status["alerting"] is True
     assert status["exceeded"] is False
@@ -265,3 +266,20 @@ def test_budget_status_reports_percentage_and_alert_state(spent_workspace):
 
 def test_budget_status_is_none_when_unconfigured(spent_workspace):
     assert budgets.status_for(spent_workspace) is None
+
+
+def test_a_cap_fires_without_any_provider_prices(spent_workspace):
+    """The reason the cap counts tokens (D-172).
+
+    It counted provider cost, which stays at zero unless every model has a
+    ModelPrice row - so an enforced budget silently never fired and the feature
+    looked configured while doing nothing. There are no prices in this test, and
+    the cap must still bite.
+    """
+    from apps.ai.models import ModelPrice
+
+    assert not ModelPrice.objects.exists()
+    TenantBudget.objects.create(tenant=spent_workspace, monthly_tokens=100, enforce=True)
+
+    with pytest.raises(budgets.BudgetExceeded):
+        budgets.assert_within_budget(spent_workspace)

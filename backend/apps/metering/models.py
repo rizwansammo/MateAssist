@@ -56,7 +56,13 @@ class UsageEvent(TenantScopedModel):
 
 
 class TenantBudget(models.Model):
-    """A monthly spend cap for one workspace (D-113).
+    """A monthly TOKEN cap for one workspace (D-113, revised D-172).
+
+    This capped provider cost in dollars until it was pointed out that the
+    figure is always zero unless someone has entered every provider's price
+    list - so the cap never fired, and the feature was inert while looking
+    configured. Tokens are the unit MateAssist measures directly and the unit
+    the product is sold in, so the cap now means what an operator would assume.
 
     Deliberately NOT a TenantScopedModel. This is platform commercial
     configuration *about* a workspace, in the same category as `Tenant` itself -
@@ -69,7 +75,9 @@ class TenantBudget(models.Model):
     """
 
     tenant = models.OneToOneField("tenancy.Tenant", on_delete=models.CASCADE, related_name="budget")
-    monthly_usd = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal("0"))
+    monthly_tokens = models.BigIntegerField(
+        default=0, help_text="Prompt and completion tokens per month. Zero means no limit."
+    )
     enforce = models.BooleanField(
         default=False, help_text="Refuse provider calls once the cap is reached."
     )
@@ -83,7 +91,7 @@ class TenantBudget(models.Model):
 
     def __str__(self) -> str:
         state = "enforced" if self.enforce else "advisory"
-        return f"{self.tenant_id}: ${self.monthly_usd}/mo ({state})"
+        return f"{self.tenant_id}: {self.monthly_tokens:,} tokens/mo ({state})"
 
     @property
     def is_capped(self) -> bool:
@@ -93,7 +101,7 @@ class TenantBudget(models.Model):
         row into a total outage for that workspace before they have typed a
         figure - a footgun disguised as strictness.
         """
-        return self.monthly_usd > 0
+        return self.monthly_tokens > 0
 
 
 def price_for(engine: str, model: str) -> ModelPrice | None:

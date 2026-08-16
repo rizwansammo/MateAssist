@@ -25,15 +25,15 @@ export const platformApi = {
 
   budgets: () => apiFetch("/platform/budgets/"),
   budgetStatus: (id) => apiFetch(`/platform/budgets/${id}/status/`),
-  saveBudget: ({ id, tenant, monthly_usd, enforce, alert_at_percent = 80 }) =>
+  saveBudget: ({ id, tenant, monthly_tokens, enforce, alert_at_percent = 80 }) =>
     id
       ? apiFetch(`/platform/budgets/${id}/`, {
           method: "PATCH",
-          body: { monthly_usd, enforce, alert_at_percent }
+          body: { monthly_tokens, enforce, alert_at_percent }
         })
       : apiFetch("/platform/budgets/", {
           method: "POST",
-          body: { tenant, monthly_usd, enforce, alert_at_percent }
+          body: { tenant, monthly_tokens, enforce, alert_at_percent }
         })
 };
 

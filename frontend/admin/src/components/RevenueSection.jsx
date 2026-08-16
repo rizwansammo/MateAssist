@@ -7,10 +7,14 @@ import { vaultApi } from "../lib/vault.js";
 /**
  * What workspaces are charged, and what each owes this month (D-160).
  *
- * Sits above the cost analysis on the same page, and the ordering is the point:
- * revenue first, then what it cost to produce. The two must never be read as
- * one number - `BillingRate` is the sell price, `ModelPrice` is the buy price,
- * and their difference is the margin shown in the last column.
+ * Shows what workspaces are charged, and nothing about what the platform pays
+ * providers (D-171). Cost and margin lived here as extra columns and confused
+ * the only person who reads this page: a rate had been set correctly, the
+ * invoice was right, and a $0.00 "our cost" alongside it read as a fault.
+ *
+ * The API still returns provider_cost and margin - removing a column is not a
+ * reason to change what the endpoint answers - so a margin view can come back
+ * whenever it is actually wanted.
  *
  * Statements are recomputed from usage events on every request, never stored. A
  * saved invoice is a second copy of the truth that drifts from the usage table
@@ -127,9 +131,7 @@ export function RevenueSection({ tenants = [] }) {
                 <th className={`${HEAD} text-right`}>Images</th>
                 <th className={`${HEAD} text-right`}>Escalations</th>
                 <th className={`${HEAD} text-right`}>Rate</th>
-                <th className={`${HEAD} text-right`}>Charged</th>
-                <th className={`${HEAD} text-right`}>Our cost</th>
-                <th className={`${HEAD} pr-6 text-right`}>Margin</th>
+                <th className={`${HEAD} pr-6 text-right`}>Charged</th>
               </tr>
             </thead>
             <tbody>
@@ -151,30 +153,16 @@ export function RevenueSection({ tenants = [] }) {
                   <td className={`${CELL} text-right font-mono text-slate-500`}>
                     {row.billable ? `$${row.rate_per_1m_tokens}/1M` : "-"}
                   </td>
-                  <td className={`${CELL} text-right font-mono font-semibold text-ink`}>
+                  <td
+                    className={`${CELL} pr-6 text-right font-mono font-semibold text-ink`}
+                  >
                     {row.billable ? `$${row.total}` : "not billable"}
-                  </td>
-                  <td className={`${CELL} text-right font-mono text-slate-500`}>
-                    {row.billable ? `$${row.provider_cost}` : "-"}
-                  </td>
-                  <td className={`${CELL} pr-6 text-right font-mono font-semibold`}>
-                    {row.billable ? (
-                      <span
-                        className={
-                          Number(row.margin) < 0 ? "text-red-700" : "text-emerald-700"
-                        }
-                      >
-                        ${row.margin}
-                      </span>
-                    ) : (
-                      "-"
-                    )}
                   </td>
                 </tr>
               ))}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-6 py-10 text-center text-slate-500">
+                  <td colSpan={6} className="px-6 py-10 text-center text-slate-500">
                     No workspaces to bill for {month}.
                   </td>
                 </tr>
