@@ -225,3 +225,24 @@ class BillingRateSerializer(serializers.ModelSerializer):
             "created_at",
         )
         read_only_fields = ("id", "tenant_name", "created_at")
+
+
+class WorkspaceCreateSerializer(serializers.Serializer):
+    """A workspace and its first administrator, in one request (D-173).
+
+    `slug` is optional and derived from the name when absent. It used to be
+    read-only with nothing deriving it, so a workspace created through the API
+    had an empty subdomain and the second one collided on the unique index.
+    """
+
+    name = serializers.CharField(max_length=120)
+    slug = serializers.SlugField(max_length=63, required=False, allow_blank=True)
+    plan = serializers.CharField(required=False, allow_blank=True)
+    support_email = serializers.EmailField(required=False, allow_blank=True)
+
+    admin_email = serializers.EmailField()
+    admin_name = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    # Blank means "generate one". An administrator creating several workspaces
+    # in a sitting reuses the password they can retype, and that is the one an
+    # attacker guesses first.
+    admin_password = serializers.CharField(required=False, allow_blank=True, write_only=True)

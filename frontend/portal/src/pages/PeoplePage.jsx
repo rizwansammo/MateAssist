@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, Copy, KeyRound, ShieldAlert, Users, X } from "lucide-react";
+import { Check, Copy, KeyRound, ShieldAlert, UserPlus, Users, X } from "lucide-react";
 
 import { useAuth } from "../context/AuthContext.jsx";
 import { usePortal } from "../context/PortalContext.jsx";
@@ -32,6 +32,7 @@ export default function PeoplePage() {
   const [loading, setLoading] = useState(true);
   const [target, setTarget] = useState(null);
   const [issued, setIssued] = useState(null);
+  const [adding, setAdding] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -58,13 +59,53 @@ export default function PeoplePage() {
     }
   };
 
+  const addPerson = async (fields) => {
+    try {
+      const result = await workspaceApi.createUser(fields);
+      setAdding(false);
+      setIssued({ email: result.email, password: result.password, created: true });
+      await refresh();
+    } catch (error) {
+      notify("Could not add that person", describe(error), "warn");
+    }
+  };
+
+  const toggleAccess = async (person) => {
+    const turningOff = person.is_active;
+    if (
+      turningOff &&
+      !window.confirm(
+        `Deactivate ${person.display_name}? They will not be able to sign in. Their conversations are kept.`
+      )
+    ) {
+      return;
+    }
+    try {
+      await workspaceApi.setActive(person.id, !turningOff);
+      await refresh();
+    } catch (error) {
+      notify("Could not change access", describe(error), "warn");
+    }
+  };
+
   return (
     <main className="flex flex-col gap-6 px-6 pb-12 pt-7">
-      <div>
-        <h1 className="mb-2 text-[28px] font-semibold tracking-tight text-ink">People</h1>
-        <p className="max-w-[720px] text-sm text-slate-500">
-          Everyone with access to this workspace. Reset a password when someone is locked out.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="mb-2 text-[28px] font-semibold tracking-tight text-ink">People</h1>
+          <p className="max-w-[720px] text-sm text-slate-500">
+            Everyone with access to this workspace. Add colleagues, reset a password, or switch
+            someone off when they leave.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="flex flex-none items-center gap-2 rounded-none border border-ink bg-ink px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-slate-800"
+        >
+          <UserPlus size={15} strokeWidth={1.9} />
+          Add person
+        </button>
       </div>
 
       {issued && <IssuedPassword issued={issued} onClose={() => setIssued(null)} />}
@@ -108,6 +149,11 @@ export default function PeoplePage() {
                   </td>
                   <td className="border-b border-slate-100 px-4 py-4 text-slate-600">
                     {ROLE_LABEL[person.role] ?? person.role}
+                    {!person.is_active && (
+                      <span className="ml-2 rounded-none border border-slate-300 bg-slate-50 px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wider text-slate-500">
+                        Off
+                      </span>
+                    )}
                   </td>
                   <td className="whitespace-nowrap border-b border-slate-100 px-4 py-4 text-slate-500">
                     {person.last_seen_at
@@ -115,13 +161,30 @@ export default function PeoplePage() {
                       : "never"}
                   </td>
                   <td className="border-b border-slate-100 px-6 py-4 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setTarget(person)}
-                      className="whitespace-nowrap rounded-none border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-ink transition hover:bg-slate-50"
-                    >
-                      Reset password
-                    </button>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setTarget(person)}
+                        className="whitespace-nowrap rounded-none border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-ink transition hover:bg-slate-50"
+                      >
+                        Reset password
+                      </button>
+                      {/* Deactivate, never delete: their conversations are this
+                          workspace's record of what its IT desk was asked. */}
+                      {person.id !== me?.id && (
+                        <button
+                          type="button"
+                          onClick={() => toggleAccess(person)}
+                          className={`whitespace-nowrap rounded-none border bg-white px-3 py-1.5 text-xs font-medium transition ${
+                            person.is_active
+                              ? "border-red-200 text-red-700 hover:bg-red-50"
+                              : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                          }`}
+                        >
+                          {person.is_active ? "Deactivate" : "Reactivate"}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -140,6 +203,8 @@ export default function PeoplePage() {
       {target && (
         <ResetDialog person={target} onClose={() => setTarget(null)} onConfirm={reset} />
       )}
+
+      {adding && <AddPersonDialog onClose={() => setAdding(false)} onConfirm={addPerson} />}
     </main>
   );
 }
@@ -225,6 +290,129 @@ function ResetDialog({ person, onClose, onConfirm }) {
   );
 }
 
+function AddPersonDialog({ onClose, onConfirm }) {
+  const [form, setForm] = useState({ email: "", full_name: "", password: "", role: "END_USER" });
+  const [working, setWorking] = useState(false);
+
+  const field =
+    "w-full rounded-none border border-hairline bg-white px-3.5 py-2.5 text-[13.5px] text-ink outline-none transition placeholder:text-slate-300 focus:border-emerald-600";
+  const label =
+    "mb-1.5 block text-[12px] font-semibold uppercase tracking-[0.1em] text-slate-500";
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setWorking(true);
+    await onConfirm({ ...form, email: form.email.trim() });
+    setWorking(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 p-4">
+      <form
+        onSubmit={submit}
+        className="w-full max-w-[520px] rounded-none border border-hairline bg-white"
+      >
+        <div className="flex items-start justify-between border-b border-hairline px-6 py-4">
+          <div>
+            <div className="text-[15px] font-semibold text-ink">Add a person</div>
+            <div className="mt-0.5 text-[12.5px] text-slate-500">
+              They will be able to sign in immediately.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-none border border-hairline bg-white p-1.5 text-slate-500 transition hover:bg-slate-50"
+          >
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="grid gap-5 px-6 py-5">
+          <div>
+            <label htmlFor="new_email" className={label}>
+              Work email
+            </label>
+            <input
+              id="new_email"
+              type="email"
+              required
+              value={form.email}
+              onChange={(event) => setForm({ ...form, email: event.target.value })}
+              placeholder="colleague@yourcompany.com"
+              className={field}
+            />
+            <p className="mt-1.5 text-[11.5px] text-slate-400">
+              This is how they sign in, and where replies to their escalations go.
+            </p>
+          </div>
+
+          <div>
+            <label htmlFor="new_name" className={label}>
+              Full name
+            </label>
+            <input
+              id="new_name"
+              value={form.full_name}
+              onChange={(event) => setForm({ ...form, full_name: event.target.value })}
+              className={field}
+            />
+          </div>
+
+          <div className="grid gap-5 sm:grid-cols-2">
+            <div>
+              <label htmlFor="new_role" className={label}>
+                Role
+              </label>
+              <select
+                id="new_role"
+                value={form.role}
+                onChange={(event) => setForm({ ...form, role: event.target.value })}
+                className={field}
+              >
+                <option value="END_USER">Member</option>
+                <option value="AGENT">Agent</option>
+                <option value="TENANT_ADMIN">Administrator</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="new_password" className={label}>
+                Password
+              </label>
+              <input
+                id="new_password"
+                type="text"
+                value={form.password}
+                onChange={(event) => setForm({ ...form, password: event.target.value })}
+                placeholder="Leave blank to generate"
+                className={`${field} font-mono`}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-hairline px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-none border border-slate-300 bg-white px-4 py-2.5 text-[13px] font-medium text-slate-700 transition hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={working || !form.email.trim()}
+            className="rounded-none border border-ink bg-ink px-5 py-2.5 text-[13px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+          >
+            {working ? "Adding..." : "Add person"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+
 function IssuedPassword({ issued, onClose }) {
   const [copied, setCopied] = useState(false);
 
@@ -244,7 +432,9 @@ function IssuedPassword({ issued, onClose }) {
         <KeyRound size={16} strokeWidth={1.8} className="flex-none text-emerald-700" />
         <div className="min-w-0 flex-1">
           <div className="text-[13.5px] font-semibold text-emerald-900">
-            New password for {issued.email}
+            {issued.created
+              ? `${issued.email} can now sign in`
+              : `New password for ${issued.email}`}
           </div>
           <div className="mt-0.5 text-[12px] text-emerald-800">
             Shown once. Nothing can display it again - send it to them now.

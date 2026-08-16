@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 
 from apps.audit.models import Level, record
 
+from . import provisioning
 from .context import platform_scope
 from .models import ASSISTANT_INSTRUCTIONS_MAX, AssistantRule, Membership, Role
 
@@ -240,8 +241,23 @@ def _generate_password() -> str:
     return "-".join("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3))
 
 
+class MemberCreateSerializer(serializers.Serializer):
+    """A new person in this workspace (D-173).
+
+    No `tenant` field. The workspace comes from the request, so a tenant admin
+    naming somebody else's workspace is not refused - it cannot be expressed.
+    """
+
+    email = serializers.EmailField()
+    full_name = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    password = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    role = serializers.ChoiceField(
+        choices=[Role.END_USER, Role.AGENT, Role.TENANT_ADMIN], required=False
+    )
+
+
 class WorkspaceUserListView(APIView):
-    """Everyone in this workspace (D-159).
+    """Everyone in this workspace, and adding to it (D-159, D-173).
 
     Reads memberships rather than users: a User is global and may belong to
     several workspaces, so listing users directly would be a way to enumerate
@@ -258,6 +274,87 @@ class WorkspaceUserListView(APIView):
             .order_by("role", "user__email")
         )
         return Response(WorkspaceUserSerializer(memberships, many=True).data)
+
+    @extend_schema(request=MemberCreateSerializer, responses={201: dict})
+    def post(self, request):
+        payload = MemberCreateSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        try:
+            result = provisioning.create_member(tenant=request.tenant, **payload.validated_data)
+        except provisioning.ProvisioningError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = result["user"]
+        record(
+            "workspace.user_created",
+            tenant=request.tenant,
+            actor=request.user,
+            level=Level.AUTH,
+            target=user.email,
+            role=payload.validated_data.get("role") or Role.END_USER,
+        )
+        # Shown once. The administrator has to pass it on now; no screen can
+        # display it again.
+        return Response(
+            {"email": user.email, "password": result["password"], "id": user.pk},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class WorkspaceUserAccessView(APIView):
+    """Switch a member's access off, or back on (D-173).
+
+    Deactivation rather than deletion. A departing employee's conversations are
+    the workspace's record of what its IT desk was asked, and removing the user
+    would take that history with them - so `is_active` goes false and the
+    account stops signing in.
+    """
+
+    permission_classes = [IsWorkspaceAdmin]
+
+    @extend_schema(request=None, responses={200: WorkspaceUserSerializer})
+    def patch(self, request, user_id: int):
+        membership = get_object_or_404(
+            Membership.all_objects.select_related("user"),
+            tenant=request.tenant,
+            user_id=user_id,
+        )
+        target = membership.user
+
+        if target.pk == request.user.pk:
+            # An administrator who deactivates themselves is locked out of the
+            # screen that would undo it.
+            return Response(
+                {"detail": "You cannot deactivate your own account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Same escalation guard as the password reset (D-159): a platform owner
+        # sitting in this workspace shares one User row, and disabling it would
+        # let a tenant admin lock the platform owner out of the console.
+        with platform_scope():
+            is_platform_owner = Membership.all_objects.filter(
+                user=target, tenant__isnull=True, role=Role.PLATFORM_OWNER
+            ).exists()
+        if is_platform_owner:
+            return Response(
+                {"detail": "This account is managed by the platform owner."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        active = bool(request.data.get("is_active", not target.is_active))
+        target.is_active = active
+        target.save(update_fields=["is_active"])
+
+        record(
+            "workspace.user_reactivated" if active else "workspace.user_deactivated",
+            tenant=request.tenant,
+            actor=request.user,
+            level=Level.AUTH,
+            target=target.email,
+        )
+        return Response(WorkspaceUserSerializer(membership).data)
 
 
 class WorkspaceUserPasswordResetView(APIView):

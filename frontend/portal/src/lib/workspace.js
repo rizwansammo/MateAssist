@@ -20,6 +20,25 @@ export const workspaceApi = {
 
   sendTest: (to) => apiFetch("/workspace/mail-test/", { method: "POST", body: { to } }),
 
+  /**
+   * Add a person to this workspace (D-173).
+   *
+   * No tenant in the payload - the server takes it from the request, so this
+   * client has no way to name a different one.
+   */
+  createUser: ({ email, full_name, password, role }) =>
+    apiFetch("/workspace/users/", {
+      method: "POST",
+      body: { email, full_name, password: password || "", role: role || undefined }
+    }),
+
+  /** Switch access off or back on. Deactivation keeps their history. */
+  setActive: (userId, isActive) =>
+    apiFetch(`/workspace/users/${userId}/access/`, {
+      method: "PATCH",
+      body: { is_active: isActive }
+    }),
+
   /** Everyone in this workspace, for its administrator (D-159). */
   users: (signal) => apiFetch("/workspace/users/", { signal }),
 

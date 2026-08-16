@@ -65,3 +65,36 @@ def platform_scope():
                 "SELECT set_config('app.tenant_id', %s, true)",
                 ["" if previous is None else str(previous)],
             )
+
+
+@contextmanager
+def db_tenant_scope(tenant_id: int):
+    """Arm the database session for one workspace, then put it back.
+
+    The inverse of `platform_scope`. A platform request has no tenant armed, so
+    the RLS WITH CHECK clause demands `tenant_id IS NULL` and refuses any
+    tenant-owned row - which is correct, and is exactly what a platform owner
+    creating a workspace's first membership runs into.
+
+    Arming the session is the honest fix. Writing through the RLS-bypassing
+    owner connection would also work and would quietly move a write off the
+    policy-enforced path; this keeps the policy in force and simply tells it
+    which workspace the row belongs to.
+
+    `set_config(..., true)` is transaction-scoped, so callers doing several
+    writes should hold a transaction around this block.
+    """
+    from django.db import connection
+
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT app_current_tenant_id()")
+        previous = cursor.fetchone()[0]
+        cursor.execute("SELECT set_config('app.tenant_id', %s, true)", [str(tenant_id)])
+    try:
+        yield
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT set_config('app.tenant_id', %s, true)",
+                ["" if previous is None else str(previous)],
+            )

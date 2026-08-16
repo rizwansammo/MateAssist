@@ -24,6 +24,7 @@ from apps.audit.models import AuditEvent, Level, record
 from apps.metering import billing, rollups
 from apps.metering.models import BillingRate, TenantBudget
 from apps.metering.serializers import AuditEventSerializer, TenantBudgetSerializer
+from apps.tenancy import provisioning
 from apps.tenancy.models import Tenant
 
 from .permissions import IsPlatformOwner
@@ -35,6 +36,7 @@ from .serializers import (
     ProviderKeySerializer,
     ProviderKeyWriteSerializer,
     TenantSerializer,
+    WorkspaceCreateSerializer,
 )
 
 
@@ -304,6 +306,82 @@ class TenantViewSet(viewsets.ModelViewSet):
             )
             .order_by("name")
         )
+
+    @extend_schema(request=WorkspaceCreateSerializer, responses={201: TenantSerializer})
+    def create(self, request, *args, **kwargs):
+        """Create the workspace AND its first administrator (D-173).
+
+        Both or neither: a workspace with no administrator cannot be signed into
+        and shows up in nobody's list, so a half-create leaves a row that only
+        the database knows about.
+        """
+        payload = WorkspaceCreateSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        try:
+            result = provisioning.create_workspace(**payload.validated_data)
+        except provisioning.ProvisioningError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        tenant, owner = result["tenant"], result["owner"]
+        record(
+            "tenant.created",
+            actor=request.user,
+            level=Level.AUTH,
+            target=tenant.name,
+            ip=_client_ip(request),
+            slug=tenant.slug,
+            owner=owner.email,
+        )
+
+        # Serialised from the object just created, not re-read through
+        # get_queryset(). That queryset runs on the platform alias - a separate
+        # connection - which cannot see a row this request has not committed.
+        # The counts are known anyway for a workspace one second old.
+        tenant.user_count = 1
+        tenant.document_count = 0
+        body = TenantSerializer(tenant).data
+        # Returned once, like every other generated credential here. Nothing can
+        # show it again, so the operator has to pass it on now.
+        body["owner_email"] = owner.email
+        body["owner_password"] = result["password"]
+        return Response(body, status=status.HTTP_201_CREATED)
+
+    @extend_schema(request=None, responses={200: dict})
+    @action(detail=True, methods=["post"], url_path="reset-owner-password")
+    def reset_owner_password(self, request, pk=None):
+        """Reset the workspace owner's password.
+
+        The platform owner sits above every workspace, so this needs no guard
+        against privilege escalation - unlike the tenant-admin equivalent, which
+        must refuse to touch a platform owner's shared User row (D-159).
+        """
+        tenant = self.get_object()
+        if tenant.owner_id is None:
+            return Response(
+                {"detail": "This workspace has no owner on record."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        owner = tenant.owner
+        password = request.data.get("new_password") or provisioning.generate_password()
+        try:
+            provisioning.check_password_strength(password, owner)
+        except provisioning.ProvisioningError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        owner.set_password(password)
+        owner.save(update_fields=["password"])
+
+        record(
+            "tenant.owner_password_reset",
+            actor=request.user,
+            level=Level.AUTH,
+            target=owner.email,
+            ip=_client_ip(request),
+            tenant_scope=tenant.name,
+        )
+        return Response({"email": owner.email, "password": password})
 
     @extend_schema(responses={200: TenantSerializer})
     @action(detail=True, methods=["post"])

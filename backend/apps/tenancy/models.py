@@ -46,6 +46,25 @@ class Tenant(models.Model):
 
     name = models.CharField(max_length=120)
     slug = models.SlugField(max_length=63, unique=True, db_index=True)
+
+    # The person who owns this workspace commercially (D-173).
+    #
+    # Deliberately NOT a fifth Role. A role drives the permission matrix, and
+    # adding one means touching every check and every test; ownership is an
+    # identity and billing fact, not a permission. The owner holds TENANT_ADMIN
+    # like any other administrator - this field only says which of them is THE
+    # one, which a role cannot express because a role cannot be limited to one
+    # holder.
+    #
+    # SET_NULL, not CASCADE: deleting a person must never delete the company.
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="owned_workspaces",
+        help_text="The workspace's primary administrator.",
+    )
     plan = models.CharField(max_length=20, choices=Plan.choices, default=Plan.GROWTH)
     region = models.CharField(max_length=32, default="eu-central-1")
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)

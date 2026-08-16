@@ -1,5 +1,8 @@
+import { useState } from "react";
 import { Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+
+import { NewTenantDialog } from "../components/NewTenantDialog.jsx";
 import { Pill } from "@mateassist/ui";
 
 import { DataState } from "../components/DataState.jsx";
@@ -24,6 +27,7 @@ export default function TenantsPage() {
   const navigate = useNavigate();
   const { tenants, tenantsLoading, tenantsError, refreshTenants, tenantStats, toggleTenant, notify } =
     useAdmin();
+  const [creating, setCreating] = useState(false);
 
   return (
     <main className="flex flex-col gap-5 px-6 pb-12 pt-7">
@@ -38,17 +42,11 @@ export default function TenantsPage() {
         </div>
         <button
           type="button"
-          onClick={() =>
-            notify(
-              "Not yet available",
-              "Self-serve provisioning arrives with the subscription flow (A-011). Workspaces are created by an operator until then.",
-              "warn"
-            )
-          }
+          onClick={() => setCreating(true)}
           className="flex flex-none items-center gap-2 whitespace-nowrap rounded-none bg-emerald-600 px-4 py-3 text-[13.5px] font-semibold text-white transition hover:bg-emerald-700"
         >
           <Plus size={15} />
-          Provision tenant
+          New workspace
         </button>
       </div>
 
@@ -181,6 +179,10 @@ export default function TenantsPage() {
         Suspending a tenant blocks portal sign-in and pauses its AI routing immediately. The change
         is written to the audit log.
       </p>
+      {creating && (
+        <NewTenantDialog onClose={() => setCreating(false)} onCreated={refreshTenants} />
+      )}
+
     </main>
   );
 }

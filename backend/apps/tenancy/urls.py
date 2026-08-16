@@ -5,6 +5,7 @@ from .views import (
     AssistantRuleViewSet,
     WorkspaceMailTestView,
     WorkspaceSettingsView,
+    WorkspaceUserAccessView,
     WorkspaceUserListView,
     WorkspaceUserPasswordResetView,
 )
@@ -18,6 +19,11 @@ urlpatterns = router.urls + [
     path("workspace/settings/", WorkspaceSettingsView.as_view(), name="workspace-settings"),
     path("workspace/mail-test/", WorkspaceMailTestView.as_view(), name="workspace-mail-test"),
     path("workspace/users/", WorkspaceUserListView.as_view(), name="workspace-users"),
+    path(
+        "workspace/users/<int:user_id>/access/",
+        WorkspaceUserAccessView.as_view(),
+        name="workspace-user-access",
+    ),
     path(
         "workspace/users/<int:user_id>/reset-password/",
         WorkspaceUserPasswordResetView.as_view(),

@@ -25,6 +25,16 @@ export const platformApi = {
 
   budgets: () => apiFetch("/platform/budgets/"),
   budgetStatus: (id) => apiFetch(`/platform/budgets/${id}/status/`),
+  /** Create a workspace and its first administrator in one call (D-173). */
+  createTenant: (payload) => apiFetch("/platform/tenants/", { method: "POST", body: payload }),
+
+  /** Returns the new password once. Nothing can show it again. */
+  resetTenantOwnerPassword: (id, newPassword) =>
+    apiFetch(`/platform/tenants/${id}/reset-owner-password/`, {
+      method: "POST",
+      body: newPassword ? { new_password: newPassword } : {}
+    }),
+
   saveBudget: ({ id, tenant, monthly_tokens, enforce, alert_at_percent = 80 }) =>
     id
       ? apiFetch(`/platform/budgets/${id}/`, {
