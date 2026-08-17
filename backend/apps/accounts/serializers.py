@@ -137,3 +137,13 @@ class PasswordChangeSerializer(serializers.Serializer):
             # what the form needs to show all the rules that were broken.
             raise serializers.ValidationError(list(exc.messages)) from exc
         return value
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    code = serializers.CharField(max_length=12)
+    new_password = serializers.CharField(write_only=True)

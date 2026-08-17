@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowRight, ShieldCheck } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 
+import { ForgotPassword } from "../components/ForgotPassword.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 
 /**
@@ -18,6 +19,7 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [recovering, setRecovering] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -67,6 +69,20 @@ export default function LoginPage() {
           Restricted to platform owners. Workspace accounts cannot sign in here.
         </p>
 
+        {recovering ? (
+          <div className="flex flex-col gap-5">
+            <ForgotPassword
+              tone="dark"
+              initialEmail={email}
+              onCancel={() => setRecovering(false)}
+              onDone={(address) => {
+                setEmail(address);
+                setPassword("");
+                setRecovering(false);
+              }}
+            />
+          </div>
+        ) : (
         <form className="flex flex-col gap-5" onSubmit={onSubmit}>
           <label className="flex flex-col gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
@@ -83,9 +99,20 @@ export default function LoginPage() {
           </label>
 
           <label className="flex flex-col gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
-              Password
-            </span>
+            <div className="flex items-baseline justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+                Password
+              </span>
+              {/* The console had no recovery at all: a locked-out platform
+                  owner needed shell access to get back in (D-176). */}
+              <button
+                type="button"
+                onClick={() => setRecovering(true)}
+                className="text-xs text-emerald-400 underline-offset-2 hover:underline"
+              >
+                Forgot?
+              </button>
+            </div>
             <input
               type="password"
               required
@@ -115,6 +142,7 @@ export default function LoginPage() {
             <ArrowRight size={16} />
           </button>
         </form>
+        )}
       </div>
     </div>
   );

@@ -12,6 +12,8 @@ from apps.ai.models import PROVIDER_DEFAULTS, Engine, ModelPrice, Provider, Prov
 from apps.metering.models import BillingRate
 from apps.tenancy.models import Tenant
 
+from .models import PlatformSettings
+
 
 class ProviderKeySerializer(serializers.ModelSerializer):
     """Read shape. Note the absence of `ciphertext`."""
@@ -246,3 +248,45 @@ class WorkspaceCreateSerializer(serializers.Serializer):
     # in a sitting reuses the password they can retype, and that is the one an
     # attacker guesses first.
     admin_password = serializers.CharField(required=False, allow_blank=True, write_only=True)
+
+
+class PlatformMailSerializer(serializers.ModelSerializer):
+    """Platform SMTP, with the password write-only (D-175).
+
+    `smtp_password` is accepted and never returned. Omitting it leaves the
+    stored one alone; sending an empty string clears it. Without that
+    distinction, saving the From address would wipe a working credential every
+    time.
+    """
+
+    smtp_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    smtp_password_set = serializers.SerializerMethodField()
+    is_configured = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = PlatformSettings
+        fields = (
+            "smtp_host",
+            "smtp_port",
+            "smtp_username",
+            "smtp_password",
+            "smtp_password_set",
+            "smtp_use_tls",
+            "from_email",
+            "from_name",
+            "is_configured",
+            "updated_at",
+        )
+        read_only_fields = ("updated_at",)
+
+    def get_smtp_password_set(self, obj) -> bool:
+        return bool(obj.smtp_password_ciphertext)
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop("smtp_password", None)
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        if password is not None:
+            instance.set_smtp_password(password)
+        instance.save()
+        return instance

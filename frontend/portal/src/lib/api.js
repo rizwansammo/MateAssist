@@ -114,6 +114,19 @@ export async function apiFetch(path, options = {}) {
 
 export const api = {
   health: (signal) => apiFetch("/health/", { signal }),
+  /**
+   * Password recovery (D-176). Both calls are unauthenticated by necessity -
+   * the person cannot sign in, which is the problem being solved.
+   */
+  requestPasswordReset: (email) =>
+    apiFetch("/auth/password-reset/", { method: "POST", body: { email } }),
+
+  confirmPasswordReset: (email, code, newPassword) =>
+    apiFetch("/auth/password-reset/confirm/", {
+      method: "POST",
+      body: { email, code, new_password: newPassword }
+    }),
+
   login: (email, password) =>
     apiFetch("/auth/login/", { method: "POST", body: { email, password } }),
   logout: () => apiFetch("/auth/logout/", { method: "POST" }),

@@ -1,4 +1,4 @@
-import { BarChart3, Building2, KeyRound, LayoutDashboard, ScrollText, ShieldCheck } from "lucide-react";
+import { BarChart3, Mail, Building2, KeyRound, LayoutDashboard, ScrollText, ShieldCheck } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Toast } from "@mateassist/ui";
 
@@ -11,6 +11,7 @@ const NAV = [
   { to: "/tenants", label: "Tenant Management", icon: Building2, crumb: "Tenant management" },
   { to: "/ai", label: "AI Configuration", icon: KeyRound, crumb: "AI configuration" },
   { to: "/billing", label: "Usage & Billing", icon: BarChart3, crumb: "Usage & billing" },
+  { to: "/mail", label: "Platform Mail", icon: Mail, crumb: "Platform mail" },
   { to: "/logs", label: "System Logs", icon: ScrollText, crumb: "System logs" }
 ];
 

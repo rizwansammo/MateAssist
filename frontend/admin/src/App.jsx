@@ -8,6 +8,7 @@ import OverviewPage from "./pages/OverviewPage.jsx";
 import TenantsPage from "./pages/TenantsPage.jsx";
 import AiConfigurationPage from "./pages/AiConfigurationPage.jsx";
 import BillingPage from "./pages/BillingPage.jsx";
+import PlatformMailPage from "./pages/PlatformMailPage.jsx";
 import LogsPage from "./pages/LogsPage.jsx";
 
 /**
@@ -28,6 +29,7 @@ export default function App() {
             <Route path="tenants" element={<TenantsPage />} />
             <Route path="ai" element={<AiConfigurationPage />} />
             <Route path="billing" element={<BillingPage />} />
+            <Route path="mail" element={<PlatformMailPage />} />
             <Route path="logs" element={<LogsPage />} />
           </Route>
         </Route>

@@ -27,10 +27,13 @@ from apps.metering.serializers import AuditEventSerializer, TenantBudgetSerializ
 from apps.tenancy import provisioning
 from apps.tenancy.models import Tenant
 
+from . import mail as platform_mail
+from .models import PlatformSettings
 from .permissions import IsPlatformOwner
 from .serializers import (
     BillingRateSerializer,
     ModelPriceSerializer,
+    PlatformMailSerializer,
     ProviderKeyCheckSerializer,
     ProviderKeyConfigSerializer,
     ProviderKeySerializer,
@@ -655,3 +658,69 @@ class BillingStatementView(APIView):
                 "statements": rows,
             }
         )
+
+
+class PlatformMailView(APIView):
+    """How MateAssist itself sends email (D-175).
+
+    Not the same thing as a workspace's SMTP. This carries password reset codes
+    and account emails, so it must never route through a customer's server -
+    recovery for the platform cannot depend on a customer's infrastructure.
+    """
+
+    permission_classes = [IsPlatformOwner]
+
+    @extend_schema(responses={200: PlatformMailSerializer})
+    def get(self, request):
+        return Response(PlatformMailSerializer(PlatformSettings.load()).data)
+
+    @extend_schema(request=PlatformMailSerializer, responses={200: PlatformMailSerializer})
+    def patch(self, request):
+        config = PlatformSettings.load()
+        serializer = PlatformMailSerializer(config, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        record(
+            "platform.mail_updated",
+            actor=request.user,
+            level=Level.AUTH,
+            target=config.smtp_host or "unconfigured",
+            ip=_client_ip(request),
+        )
+        return Response(serializer.data)
+
+
+class PlatformMailTestView(APIView):
+    """Prove the settings work before anything depends on them.
+
+    Without this the first real test of platform mail is a locked-out owner
+    waiting for a reset code that was never going to arrive.
+    """
+
+    permission_classes = [IsPlatformOwner]
+
+    @extend_schema(request=None, responses={200: dict})
+    def post(self, request):
+        recipient = (request.data.get("to") or request.user.email or "").strip()
+        if not recipient:
+            return Response(
+                {"detail": "No address to send to."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        result = platform_mail.send(
+            to=recipient, subject=platform_mail.TEST_SUBJECT, body=platform_mail.TEST_BODY
+        )
+        record(
+            "platform.mail_test",
+            actor=request.user,
+            level=Level.AUTH,
+            target=recipient,
+            ip=_client_ip(request),
+            ok=result["sent"],
+            detail=result["detail"][:200],
+        )
+        # 200 either way: a working endpoint correctly reporting broken mail is
+        # not itself an error, and an HTTP failure here is indistinguishable
+        # from the request failing.
+        return Response(result)

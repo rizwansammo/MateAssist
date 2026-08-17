@@ -20,10 +20,13 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.audit.models import Level, record
 from apps.tenancy.models import Membership, Role
 
+from . import recovery
 from .serializers import (
     AccountUpdateSerializer,
     LoginSerializer,
     PasswordChangeSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
     SessionSerializer,
     UserSerializer,
 )
@@ -242,3 +245,50 @@ class PasswordChangeView(APIView):
 def _client_ip(request) -> str:
     forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
     return (forwarded.split(",")[0] if forwarded else request.META.get("REMOTE_ADDR", "")).strip()
+
+
+class PasswordResetRequestView(APIView):
+    """Ask for a reset code (D-176).
+
+    AllowAny by necessity: the person asking cannot sign in, which is the whole
+    problem. Every protection therefore lives inside `recovery` - rate limits,
+    an identical reply whatever happens, and codes that expire.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(request=PasswordResetRequestSerializer, responses={200: None})
+    def post(self, request):
+        payload = PasswordResetRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        result = recovery.request_code(
+            email=payload.validated_data["email"], ip=_client_ip(request)
+        )
+        # Always 200, always the same body. A different status for an unknown
+        # address turns this endpoint into a way to enumerate customers.
+        return Response(result)
+
+
+class PasswordResetConfirmView(APIView):
+    """Use a code to set a new password (D-176)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes: list = []
+
+    @extend_schema(request=PasswordResetConfirmSerializer, responses={200: None})
+    def post(self, request):
+        payload = PasswordResetConfirmSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+
+        result = recovery.confirm_code(
+            email=payload.validated_data["email"],
+            code=payload.validated_data["code"],
+            new_password=payload.validated_data["new_password"],
+            ip=_client_ip(request),
+        )
+        return Response(
+            result,
+            status=status.HTTP_200_OK if result["ok"] else status.HTTP_400_BAD_REQUEST,
+        )

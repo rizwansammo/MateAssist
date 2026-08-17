@@ -25,6 +25,23 @@ export const platformApi = {
 
   budgets: () => apiFetch("/platform/budgets/"),
   budgetStatus: (id) => apiFetch(`/platform/budgets/${id}/status/`),
+  // ---- platform mail (D-175) ----
+  //
+  // MateAssist's OWN mail, not a workspace's. This carries password reset
+  // codes, so it must never route through a customer's SMTP server.
+  mailSettings: (signal) => apiFetch("/platform/mail/", { signal }),
+
+  /**
+   * `smtp_password` is sent only when the operator typed one. An empty string
+   * clears the stored credential, so passing it unconditionally would wipe a
+   * working password every time the From address was edited.
+   */
+  saveMailSettings: (fields) =>
+    apiFetch("/platform/mail/", { method: "PATCH", body: fields }),
+
+  sendMailTest: (to) =>
+    apiFetch("/platform/mail-test/", { method: "POST", body: to ? { to } : {} }),
+
   /** Create a workspace and its first administrator in one call (D-173). */
   createTenant: (payload) => apiFetch("/platform/tenants/", { method: "POST", body: payload }),
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowRight } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Wordmark } from "@mateassist/ui";
+import { ForgotPassword } from "../components/ForgotPassword.jsx";
 import { baseDomain } from "../lib/domain.js";
 
 import { useAuth } from "../context/AuthContext.jsx";
@@ -25,6 +26,7 @@ export default function LoginPage() {
   const workspace = window.location.hostname.split(".")[0];
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [recovering, setRecovering] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -115,6 +117,17 @@ export default function LoginPage() {
           </h2>
           <p className="mb-8 text-sm text-slate-500">Enter your workspace to continue.</p>
 
+          {recovering ? (
+            <ForgotPassword
+              initialEmail={email}
+              onCancel={() => setRecovering(false)}
+              onDone={(address) => {
+                setEmail(address);
+                setPassword("");
+                setRecovering(false);
+              }}
+            />
+          ) : (
           <form className="flex flex-col gap-5" onSubmit={onSubmit}>
             <label className="flex flex-col gap-2">
               <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
@@ -154,9 +167,16 @@ export default function LoginPage() {
                 <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
                   Password
                 </span>
-                <a href="#reset" className="text-xs">
+                {/* A real flow now (D-176). This was an anchor to "#reset",
+                    which went nowhere - so a locked-out user's only recovery
+                    was contacting whoever runs the server. */}
+                <button
+                  type="button"
+                  onClick={() => setRecovering(true)}
+                  className="text-xs text-emerald-700 underline-offset-2 hover:underline"
+                >
                   Forgot?
-                </a>
+                </button>
               </div>
               <input
                 type="password"
@@ -196,6 +216,7 @@ export default function LoginPage() {
               <ArrowRight size={16} />
             </button>
           </form>
+          )}
 
           <p className="mt-8 text-xs leading-relaxed text-slate-400">
             Protected by your organisation&apos;s access policy. Sessions expire after 12 hours of

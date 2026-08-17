@@ -6,6 +6,8 @@ from .views import (
     BillingRateViewSet,
     BillingStatementView,
     ModelPriceViewSet,
+    PlatformMailTestView,
+    PlatformMailView,
     PlatformTenantSpendView,
     PlatformUsageView,
     ProviderKeyViewSet,
@@ -26,5 +28,7 @@ urlpatterns = router.urls + [
     path("platform/usage/", PlatformUsageView.as_view(), name="platform-usage"),
     path("platform/spend/", PlatformTenantSpendView.as_view(), name="platform-spend"),
     path("platform/logs/", AuditLogView.as_view(), name="platform-logs"),
+    path("platform/mail/", PlatformMailView.as_view(), name="platform-mail"),
+    path("platform/mail-test/", PlatformMailTestView.as_view(), name="platform-mail-test"),
     path("platform/statements/", BillingStatementView.as_view(), name="platform-statements"),
 ]
