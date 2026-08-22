@@ -109,6 +109,11 @@ docker compose -f docker-compose.prod.yml --env-file .env pull
 docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
+**The marketing page ships with the deploy too.** `infra/www` is static files on
+the host rather than a container image, so a container-only deploy left the live
+site untouched - editing it and pushing changed nothing. The deploy job now
+rsyncs that directory (with `--delete`, scoped to `/opt/MateAssist/www`).
+
 **Deployment is automatic, and gated on CI.** A push to `main` builds the three
 images while CI runs the tests; the deploy step then waits for CI's verdict on
 that exact commit and refuses to proceed unless it passed. An unfinished or

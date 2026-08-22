@@ -1,29 +1,44 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight } from "lucide-react";
+import { AlertTriangle, ArrowRight, BookOpen, Camera, ShieldCheck } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Wordmark } from "@mateassist/ui";
+import { AuthShell } from "@mateassist/ui";
+
 import { ForgotPassword } from "../components/ForgotPassword.jsx";
+import { useAuth } from "../context/AuthContext.jsx";
 import { baseDomain } from "../lib/domain.js";
 
-import { useAuth } from "../context/AuthContext.jsx";
-
 /**
- * Sign-in.
+ * Sign-in for a workspace (D-177).
  *
- * Phase 1 delivers the form; Phase 2 wires it to POST /api/v1/auth/login/ and
- * the httpOnly refresh cookie (D-030..D-036). The prototype's hardcoded
- * password in a defaultValue is gone, and so is the "Continue with Microsoft
- * Entra ID" button - SSO is out of scope for v1 (D-036), and a button that
- * looks real but does nothing is worse than no button.
+ * Split-screen shell shared with the platform console and matching MateDesk and
+ * MateConnect, so all three products read as siblings.
+ *
+ * No "create an account" link. Accounts are created by a workspace
+ * administrator, and an employee who cannot sign in needs their admin, not a
+ * sign-up form - so the page says exactly that instead of offering a dead end.
  */
+
+const FEATURES = [
+  { Icon: BookOpen, text: "Answers grounded in your own runbooks." },
+  { Icon: Camera, text: "Paste a screenshot instead of describing the error." },
+  { Icon: ShieldCheck, text: "Your workspace's data is isolated from every other." }
+];
+
+const FIELD =
+  "w-full rounded-none border border-[#c8cdd6] bg-white px-3.5 py-3 text-sm text-[#0b1220] " +
+  "outline-none transition placeholder:text-slate-300 focus:border-emerald-600";
+
+const LABEL = "mb-1.5 block text-[13px] font-semibold text-[#3a4252]";
+
 export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, status, isAuthenticated } = useAuth();
+  const { login, isAuthenticated } = useAuth();
 
-  // The workspace is read from the Host header server-side (D-021), so this
-  // field reflects where you already are rather than choosing where to go.
+  // Read from the Host header server-side (D-021), so this reflects where you
+  // already are rather than choosing where to go.
   const workspace = window.location.hostname.split(".")[0];
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [recovering, setRecovering] = useState(false);
@@ -57,173 +72,125 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="grid min-h-screen grid-cols-1 bg-white lg:grid-cols-[1.05fr_0.95fr]">
-      <div className="relative hidden flex-col justify-between overflow-hidden bg-ink px-16 py-14 lg:flex">
-        <div
-          className="absolute inset-0 opacity-70"
-          style={{
-            backgroundImage:
-              "linear-gradient(#131E30 1px, transparent 1px), linear-gradient(90deg, #131E30 1px, transparent 1px)",
-            backgroundSize: "48px 48px"
-          }}
-        />
-        <div className="relative">
-          <Wordmark size="text-[27px]" mark="h-10 w-10" icon={22} />
-        </div>
-        <div className="relative flex max-w-[460px] flex-col gap-7">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-400">
-            Agentic IT Operations
-          </div>
-          <h1 className="text-[44px] font-semibold leading-[1.08] tracking-tight text-white text-pretty">
-            Your IT desk, resolved before it becomes a ticket.
-          </h1>
-          <p className="text-[15px] leading-relaxed text-slate-400 text-pretty">
-            MateAssist triages requests, walks you through fixes from your company runbooks, and
-            escalates to a human engineer only when it has to.
+    <AuthShell
+      variant="portal"
+      headline={
+        <>
+          Your IT desk,
+          <br />
+          answered
+        </>
+      }
+      headlineAccent="before it's a ticket."
+      intro="Sign in to ask about anything IT. MateAssist walks you through the fix from your company's runbooks, and gets a human involved only when it has to."
+      features={FEATURES}
+    >
+      {recovering ? (
+        <>
+          <h1 className="mb-1.5 text-[26px] font-semibold text-[#0b1220]">Reset your password</h1>
+          <p className="mb-7 text-sm text-[#6b7385]">
+            We will email you a code to set a new one.
           </p>
-          {/*
-            Static brand copy, NOT metrics. This panel renders before
-            authentication, where no tenant context exists, so it is
-            structurally incapable of showing live figures. Recorded in
-            DECISIONS.md section 8 so it is never filed as a data bug.
-          */}
-          <div className="grid grid-cols-3 gap-px border border-slate-800 bg-slate-800">
-            {[
-              ["76%", "Self-served"],
-              ["41m", "Avg. resolve"],
-              ["24/7", "Coverage"]
-            ].map(([value, label]) => (
-              <div key={label} className="bg-ink3 px-4 py-4">
-                <div className="text-[22px] font-semibold text-white">{value}</div>
-                <div className="mt-1.5 text-[11px] uppercase tracking-[0.08em] text-slate-500">
-                  {label}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="relative text-xs tracking-wide text-slate-600">
-          Data isolated per workspace
-        </div>
-      </div>
+          <ForgotPassword
+            initialEmail={email}
+            onCancel={() => setRecovering(false)}
+            onDone={(address) => {
+              setEmail(address);
+              setPassword("");
+              setRecovering(false);
+            }}
+          />
+        </>
+      ) : (
+        <>
+          <h1 className="mb-1.5 text-[26px] font-semibold text-[#0b1220]">Sign in</h1>
+          <p className="mb-7 text-sm text-[#6b7385]">
+            Use the work email your IT team set you up with.
+          </p>
 
-      <div className="flex items-center justify-center px-6 py-14 sm:px-12">
-        <div className="w-full max-w-[400px]">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-            Sign in
-          </div>
-          <h2 className="mb-2 mt-3 text-[28px] font-semibold tracking-tight text-ink">
-            Welcome back
-          </h2>
-          <p className="mb-8 text-sm text-slate-500">Enter your workspace to continue.</p>
+          {error && (
+            <div
+              role="alert"
+              className="mb-5 flex gap-3 rounded-none border border-red-300 bg-red-50 px-3.5 py-2.5"
+            >
+              <AlertTriangle size={15} strokeWidth={2} className="mt-0.5 flex-none text-red-600" />
+              <span className="text-[13px] leading-relaxed text-red-800">{error}</span>
+            </div>
+          )}
 
-          {recovering ? (
-            <ForgotPassword
-              initialEmail={email}
-              onCancel={() => setRecovering(false)}
-              onDone={(address) => {
-                setEmail(address);
-                setPassword("");
-                setRecovering(false);
-              }}
-            />
-          ) : (
-          <form className="flex flex-col gap-5" onSubmit={onSubmit}>
-            <label className="flex flex-col gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
-                Workspace / Company name
-              </span>
-              <div className="flex rounded-none border border-slate-300 bg-slate-50">
-                <input
-                  type="text"
-                  value={workspace}
-                  readOnly
-                  aria-readonly="true"
-                  className="min-w-0 flex-1 rounded-none border-0 bg-transparent px-3.5 py-3 text-sm text-slate-600"
-                />
-                <span className="flex items-center rounded-none border-l border-hairline bg-slate-100 px-3.5 font-mono text-[13px] text-slate-500">
+          <form onSubmit={onSubmit} className="flex flex-col gap-4">
+            <div>
+              <span className={LABEL}>Workspace</span>
+              {/* Read-only: the subdomain already decided this. An editable box
+                  would imply you can sign in somewhere you are not. */}
+              <div className="flex rounded-none border border-[#e2e5eb] bg-[#f7f8fa]">
+                <span className="min-w-0 flex-1 truncate px-3.5 py-3 font-mono text-[13px] text-[#3a4252]">
+                  {workspace}
+                </span>
+                <span className="flex items-center border-l border-[#e2e5eb] px-3.5 font-mono text-[13px] text-[#6b7385]">
                   .{baseDomain()}
                 </span>
               </div>
-            </label>
+            </div>
 
-            <label className="flex flex-col gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
+            <div>
+              <label htmlFor="email" className={LABEL}>
                 Work email
-              </span>
+              </label>
               <input
+                id="email"
                 type="email"
                 required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
                 autoComplete="username"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
                 placeholder="you@company.com"
-                className="rounded-none border border-slate-300 bg-white px-3.5 py-3 text-sm text-ink"
+                className={FIELD}
               />
-            </label>
+            </div>
 
-            <label className="flex flex-col gap-2">
-              <div className="flex items-baseline justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-700">
+            <div>
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <label htmlFor="password" className="text-[13px] font-semibold text-[#3a4252]">
                   Password
-                </span>
-                {/* A real flow now (D-176). This was an anchor to "#reset",
-                    which went nowhere - so a locked-out user's only recovery
-                    was contacting whoever runs the server. */}
+                </label>
                 <button
                   type="button"
                   onClick={() => setRecovering(true)}
-                  className="text-xs text-emerald-700 underline-offset-2 hover:underline"
+                  className="text-[12.5px] font-medium text-emerald-700 underline-offset-2 hover:underline"
                 >
                   Forgot?
                 </button>
               </div>
               <input
+                id="password"
                 type="password"
                 required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
-                className="rounded-none border border-slate-300 bg-white px-3.5 py-3 text-sm tracking-widest text-ink"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className={FIELD}
               />
-            </label>
-
-            <label className="flex cursor-pointer items-center gap-2.5 text-[13px] text-slate-600">
-              <input
-                type="checkbox"
-                defaultChecked
-                className="h-[15px] w-[15px] rounded-none accent-emerald-600"
-              />
-              Keep me signed in on this device
-            </label>
-
-            {error && (
-              <div
-                role="alert"
-                className="flex gap-3 rounded-none border border-red-200 bg-red-50 px-4 py-3"
-              >
-                <AlertTriangle size={16} strokeWidth={2} className="mt-0.5 flex-none text-red-700" />
-                <span className="text-[12.5px] leading-relaxed text-red-800">{error}</span>
-              </div>
-            )}
+            </div>
 
             <button
               type="submit"
-              disabled={submitting || status === "restoring"}
-              className="flex items-center justify-center gap-2.5 rounded-none bg-emerald-600 px-5 py-4 text-sm font-semibold tracking-wide text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+              disabled={submitting}
+              className="mt-2 flex h-12 items-center justify-center gap-2 rounded-none bg-emerald-600 text-[15px] font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-70"
             >
-              {submitting ? "Signing in..." : "Sign in to workspace"}
-              <ArrowRight size={16} />
+              {submitting ? "Signing in..." : "Sign in"}
+              {!submitting && <ArrowRight size={16} />}
             </button>
           </form>
-          )}
 
-          <p className="mt-8 text-xs leading-relaxed text-slate-400">
-            Protected by your organisation&apos;s access policy. Sessions expire after 12 hours of
-            inactivity.
+          {/* Where a sibling product offers "create a workspace", MateAssist
+              points at the person who can actually help. */}
+          <p className="mt-8 text-[12.5px] leading-relaxed text-[#6b7385]">
+            No account yet? MateAssist accounts are created by your IT
+            administrator &mdash; ask them to add you.
           </p>
-        </div>
-      </div>
-    </div>
+        </>
+      )}
+    </AuthShell>
   );
 }

@@ -7,6 +7,7 @@
  */
 
 export { Wordmark } from "./components/Wordmark.jsx";
+export { AuthShell } from "./components/AuthShell.jsx";
 export { Pill, TONE, TONE_DOT } from "./components/Pill.jsx";
 export { Metric } from "./components/Metric.jsx";
 export { Switch } from "./components/Switch.jsx";

@@ -162,6 +162,11 @@ jobs:
       #
       # Only the DEPLOY waits. The image builds run in parallel with CI, so
       # gating here costs the difference between the two, not their sum.
+      # Needed so the static site under infra/www can be shipped below. The
+      # job previously had no checkout at all, which is also why `gh` could not
+      # infer the repository.
+      - uses: actions/checkout@v4
+
       - name: Wait for CI to pass on this commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -238,6 +243,20 @@ jobs:
           # fails with "must be owner of table".
           docker compose exec -T backend python manage.py migrate --database=admin
           EOF
+
+      # The marketing page is static files on the host, not an image, so a
+      # container deploy leaves it untouched. Editing infra/www and pushing
+      # therefore changed nothing on the live site until this existed.
+      #
+      # --delete so a removed asset actually disappears; scoped to the www
+      # directory so nothing else on a shared box can be reached.
+      - name: Publish the static site
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          rsync -az --delete             -e "ssh -i ~/.ssh/deploy"             infra/www/ "${USER}@${HOST}:/opt/MateAssist/www/"
+          ssh -i ~/.ssh/deploy "${USER}@${HOST}"             "ls -1 /opt/MateAssist/www /opt/MateAssist/www/fonts"
 
       - name: Verify the site is actually up
         env:
